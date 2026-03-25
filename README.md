@@ -1,6 +1,6 @@
 # OpenTaoAPI
 
-Open-source, self-hostable Bittensor network explorer and API. A drop-in alternative to TaoStats and TaoMarketCap with no rate limits.
+Open-source, self-hostable Bittensor network explorer and API. A drop-in alternative to TaoStats and TaoMarketCap. No API-level rate limits, unlike TaoStats (5 req/min), self-hosted API has no request limits. However, the underlying subtensor RPC nodes (e.g. Finney public endpoints) have their own connection limits. For heavy usage, run your own subtensor node.
 
 **Web UI** at `http://localhost:8000` | **Swagger docs** at `http://localhost:8000/docs`
 
