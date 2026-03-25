@@ -76,7 +76,7 @@ Response format matches the TaoStats `/api/miner/` endpoint. Includes coldkey ba
 ### Subnets
 
 ```
-GET /api/v1/subnets                         # All subnets with market cap, emission %, price, volume
+GET /api/v1/subnets                          # All subnets with market cap, emission %, price, volume
 GET /api/v1/subnet/{netuid}/info             # Subnet hyperparams and pool data
 GET /api/v1/subnet/{netuid}/neurons          # Paginated neuron list (?page=1&per_page=50)
 GET /api/v1/subnet/{netuid}/metagraph        # Full metagraph (?refresh=true to bypass cache)
@@ -87,7 +87,7 @@ GET /api/v1/subnet/{netuid}/validators       # Validators with stake, dividends,
 ### Neurons
 
 ```
-GET /api/v1/neuron/{netuid}/{uid}            # Single neuron by UID
+GET /api/v1/neuron/{netuid}/{uid}             # Single neuron by UID
 GET /api/v1/neuron/coldkey/{coldkey}          # All neurons for a coldkey
 GET /api/v1/neuron/hotkey/{hotkey}            # Neuron by hotkey
 ```
