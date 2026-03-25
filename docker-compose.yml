@@ -1,0 +1,12 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - BITTENSOR_NETWORK=finney
+      - CACHE_TTL_METAGRAPH=300
+      - CACHE_TTL_PRICE=30
+      - CACHE_TTL_DYNAMIC_INFO=120
+      - CACHE_TTL_BALANCE=60
+    restart: unless-stopped

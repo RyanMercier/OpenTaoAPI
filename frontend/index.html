@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenTaoAPI</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0a;
+  --bg-raised: #111;
+  --border: #1e1e1e;
+  --text: #c8c8c8;
+  --text-dim: #666;
+  --text-bright: #e8e8e8;
+  --accent: #00d4aa;
+  --red: #e84855;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+/* Header */
+header {
+  border-bottom: 1px solid var(--border);
+  padding: 16px 0;
+}
+
+header .inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.logo {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-bright);
+  white-space: nowrap;
+  letter-spacing: -0.3px;
+}
+
+.logo span { color: var(--accent); }
+
+.search-form {
+  display: flex;
+  flex: 1;
+  max-width: 480px;
+}
+
+.search-form input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-bright);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.search-form input::placeholder { color: var(--text-dim); }
+.search-form input:focus { border-color: #333; }
+
+.search-form button {
+  padding: 8px 16px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.search-form button:hover { color: var(--text); background: #181818; }
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 120px 20px;
+  color: var(--text-dim);
+}
+
+.empty-state p { font-size: 15px; margin-bottom: 8px; }
+.empty-state code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  padding: 2px 6px;
+}
+
+/* Loading */
+.loading {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--text-dim);
+}
+
+.loading .spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.loading p { font-size: 13px; }
+
+/* Error */
+.error-msg {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--red);
+  font-size: 13px;
+}
+
+/* Portfolio */
+.portfolio { padding: 32px 0 64px; }
+
+.coldkey-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  word-break: break-all;
+}
+
+.balance-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.balance-tao {
+  font-family: var(--mono);
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--text-bright);
+  letter-spacing: -1px;
+}
+
+.balance-usd {
+  font-family: var(--mono);
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+.balance-breakdown {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 32px;
+}
+
+.balance-breakdown span { margin-right: 16px; }
+
+/* Tokens table */
+.tokens-header {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+
+.tokens-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tokens-table th {
+  text-align: right;
+  font-weight: 400;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tokens-table th:first-child { text-align: left; }
+.tokens-table th:hover { color: var(--text); }
+.tokens-table th.sorted { color: var(--accent); }
+
+.tokens-table td {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 10px 0;
+  border-bottom: 1px solid #141414;
+  color: var(--text);
+}
+
+.tokens-table td:first-child {
+  text-align: left;
+  font-family: var(--sans);
+}
+
+.tokens-table tr:hover td { background: #0d0d0d; }
+
+.token-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sn-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+.token-label {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.val-dim { color: var(--text-dim); }
+.val-green { color: var(--accent); }
+
+/* Free TAO row */
+.free-row td { color: var(--text-dim); }
+
+/* Footer */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 16px 0;
+  text-align: center;
+}
+
+footer p {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+footer a { color: var(--text-dim); }
+footer a:hover { color: var(--text); }
+
+/* Responsive */
+@media (max-width: 640px) {
+  .balance-tao { font-size: 24px; }
+  .balance-usd { font-size: 14px; }
+  header .inner { flex-wrap: wrap; }
+  .search-form { max-width: 100%; order: 2; }
+  .tokens-table { font-size: 12px; }
+  .token-label { max-width: 80px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container inner">
+    <div class="logo">Open<span>Tao</span>API</div>
+    <form class="search-form" id="searchForm">
+      <input type="text" id="coldkeyInput" placeholder="Enter coldkey SS58 address" spellcheck="false" autocomplete="off">
+      <button type="submit">Lookup</button>
+    </form>
+  </div>
+</header>
+
+<main class="container">
+  <div id="content">
+    <div class="empty-state">
+      <p>Enter a Bittensor coldkey to view portfolio</p>
+      <code>5EhrSbeGeiLgsXcJTXXaBCcqrrMubvWcykSwk4Ho6KUd5sQG</code>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>
+      <a href="/subnets">Subnets</a> &middot;
+      <a href="/docs">API Docs</a> &middot;
+      <a href="https://github.com">Source</a> &middot;
+      Powered by <a href="https://bittensor.com">Bittensor</a> + MEXC
+    </p>
+  </div>
+</footer>
+
+<script>
+const API = '/api/v1';
+const $ = s => document.querySelector(s);
+const content = $('#content');
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function fmt(n, d = 4) {
+  if (n === 0) return '0';
+  if (Math.abs(n) < 0.0001) return n.toExponential(2);
+  const s = n.toFixed(d);
+  // trim trailing zeros but keep at least 2 decimal places
+  const parts = s.split('.');
+  if (!parts[1]) return parts[0];
+  let dec = parts[1].replace(/0+$/, '');
+  if (dec.length < 2) dec = dec.padEnd(2, '0');
+  return parts[0] + '.' + dec;
+}
+
+function fmtUsd(n) {
+  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  if (n >= 1) return '$' + n.toFixed(2);
+  return '$' + n.toFixed(4);
+}
+
+function truncate(s, len = 16) {
+  if (!s || s.length <= len) return s || '';
+  return s.slice(0, 6) + '...' + s.slice(-4);
+}
+
+let sortCol = 'balance_tao';
+let sortAsc = false;
+let currentData = null;
+
+function render(data) {
+  currentData = data;
+  const d = data;
+
+  // Build subnet rows + free TAO row
+  let rows = d.subnets.map(sn => ({
+    netuid: sn.netuid,
+    name: sn.name || `SN ${sn.netuid}`,
+    symbol: sn.symbol,
+    balance: sn.balance_tao,
+    balance_alpha: sn.balance_alpha,
+    price: sn.price_tao,
+    value: sn.value_usd,
+    yield_tao: sn.daily_yield_tao,
+    yield_usd: sn.daily_yield_usd,
+    hotkeys: sn.hotkey_count,
+    isFree: false,
+  }));
+
+  // Add free TAO as a row
+  rows.push({
+    netuid: -1,
+    name: 'Bittensor',
+    symbol: 'τ',
+    balance: d.free_balance_tao,
+    balance_alpha: d.free_balance_tao,
+    price: 1.0,
+    value: d.free_balance_tao * d.tao_price_usd,
+    yield_tao: 0,
+    yield_usd: 0,
+    hotkeys: 0,
+    isFree: true,
+  });
+
+  // Sort
+  rows.sort((a, b) => {
+    let va = a[sortCol], vb = b[sortCol];
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+    if (sortAsc) return va > vb ? 1 : va < vb ? -1 : 0;
+    return va < vb ? 1 : va > vb ? -1 : 0;
+  });
+
+  const sc = col => col === sortCol ? ' class="sorted"' : '';
+
+  content.innerHTML = `
+    <div class="portfolio">
+      <div class="coldkey-label">${esc(d.coldkey)}</div>
+      <div class="balance-row">
+        <div class="balance-tao">τ${fmt(d.total_balance_tao)}</div>
+        <div class="balance-usd">${fmtUsd(d.total_balance_usd)}</div>
+      </div>
+      <div class="balance-breakdown">
+        <span>Staked τ${fmt(d.total_staked_tao)}</span>
+        <span>Free τ${fmt(d.free_balance_tao)}</span>
+        <span>TAO/USD ${fmtUsd(d.tao_price_usd)}</span>
+      </div>
+
+      <div class="tokens-header">Tokens ${d.subnet_count + 1}</div>
+      <table class="tokens-table">
+        <thead>
+          <tr>
+            <th${sc('name')} data-col="name">Token</th>
+            <th${sc('balance')} data-col="balance">Balance</th>
+            <th${sc('price')} data-col="price">Price</th>
+            <th${sc('value')} data-col="value">Value</th>
+            <th${sc('yield_tao')} data-col="yield_tao">Daily Yield</th>
+            <th${sc('hotkeys')} data-col="hotkeys">Keys</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr class="${r.isFree ? 'free-row' : ''}">
+              <td>
+                <div class="token-name">
+                  ${r.isFree
+                    ? '<span class="sn-badge">TAO</span>'
+                    : `<span class="sn-badge">SN ${r.netuid}</span>`}
+                  <span class="token-label">${esc(r.name)}</span>
+                </div>
+              </td>
+              <td>τ${fmt(r.balance)}</td>
+              <td class="val-dim">τ${fmt(r.price, 3)}</td>
+              <td>${fmtUsd(r.value)}</td>
+              <td class="${r.yield_tao > 0 ? 'val-green' : 'val-dim'}">${r.yield_tao > 0 ? 'τ' + fmt(r.yield_tao) : '—'}</td>
+              <td class="val-dim">${r.isFree ? '—' : r.hotkeys}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // Bind sort handlers
+  content.querySelectorAll('.tokens-table th').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      if (sortCol === col) sortAsc = !sortAsc;
+      else { sortCol = col; sortAsc = false; }
+      render(currentData);
+    });
+  });
+}
+
+async function lookup(coldkey) {
+  content.innerHTML = `
+    <div class="loading">
+      <div class="spinner"></div>
+      <p>Fetching portfolio data from chain...</p>
+      <p style="margin-top:4px;font-size:11px;color:#444">First load may take 15-20s for metagraph sync</p>
+    </div>
+  `;
+
+  try {
+    const res = await fetch(`${API}/portfolio/${coldkey}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    render(data);
+    location.hash = coldkey;
+  } catch (e) {
+    content.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+  }
+}
+
+// Form submit
+$('#searchForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const ck = $('#coldkeyInput').value.trim();
+  if (ck) lookup(ck);
+});
+
+// Example coldkey click
+document.addEventListener('click', e => {
+  if (e.target.tagName === 'CODE' && e.target.closest('.empty-state')) {
+    $('#coldkeyInput').value = e.target.textContent;
+    lookup(e.target.textContent);
+  }
+});
+
+// Load from URL hash
+if (location.hash.length > 1) {
+  const ck = location.hash.slice(1);
+  $('#coldkeyInput').value = ck;
+  lookup(ck);
+}
+</script>
+
+</body>
+</html>
