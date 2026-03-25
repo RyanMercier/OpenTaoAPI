@@ -2,7 +2,7 @@
 
 Open-source, self-hostable Bittensor network explorer and API. A drop-in alternative to TaoStats and TaoMarketCap.
 
-**No API-level rate limits** — unlike TaoStats (5 req/min free tier), your self-hosted instance has no request caps. The underlying subtensor RPC nodes (e.g. public Finney endpoints) do have their own connection limits. For heavy usage or production deployments, point OpenTaoAPI at your own subtensor node:
+**No API-level rate limits** unlike TaoStats (5 req/min free tier), your self-hosted instance has no request caps. The underlying subtensor RPC nodes (e.g. public Finney endpoints) do have their own connection limits. For heavy usage or production deployments, point OpenTaoAPI at your own subtensor node:
 
 ```bash
 SUBTENSOR_ENDPOINT=ws://your-node:9944
