@@ -1,6 +1,12 @@
 # OpenTaoAPI
 
-Open-source, self-hostable Bittensor network explorer and API. A drop-in alternative to TaoStats and TaoMarketCap. No API-level rate limits, unlike TaoStats (5 req/min), self-hosted API has no request limits. However, the underlying subtensor RPC nodes (e.g. Finney public endpoints) have their own connection limits. For heavy usage, run your own subtensor node.
+Open-source, self-hostable Bittensor network explorer and API. A drop-in alternative to TaoStats and TaoMarketCap.
+
+**No API-level rate limits** — unlike TaoStats (5 req/min free tier), your self-hosted instance has no request caps. The underlying subtensor RPC nodes (e.g. public Finney endpoints) do have their own connection limits. For heavy usage or production deployments, point OpenTaoAPI at your own subtensor node:
+
+```bash
+SUBTENSOR_ENDPOINT=ws://your-node:9944
+```
 
 **Web UI** at `http://localhost:8000` | **Swagger docs** at `http://localhost:8000/docs`
 
@@ -155,6 +161,7 @@ All settings via environment variables (or `.env` file):
 | Variable | Default | Description |
 |---|---|---|
 | `BITTENSOR_NETWORK` | `finney` | Network: finney, testnet, local |
+| `SUBTENSOR_ENDPOINT` | _(empty)_ | Custom subtensor websocket URL (e.g. `ws://localhost:9944`). Overrides `BITTENSOR_NETWORK` when set. Use this to connect to your own node and avoid public RPC rate limits. |
 | `CACHE_TTL_METAGRAPH` | `300` | Metagraph cache seconds |
 | `CACHE_TTL_PRICE` | `30` | Price cache seconds |
 | `CACHE_TTL_DYNAMIC_INFO` | `120` | Subnet pool data cache seconds |
@@ -216,7 +223,7 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 
 | Feature | TaoStats | OpenTaoAPI |
 |---|---|---|
-| Rate limit | 5 req/min (free) | None (self-hosted) |
+| Rate limit | 5 req/min (free) | None on API; RPC-limited by subtensor node (use your own node for unlimited) |
 | API key required | Yes | No |
 | Source code | Closed | MIT open source |
 | Self-hostable | No | Yes |

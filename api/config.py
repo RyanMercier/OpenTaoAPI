@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
     bittensor_network: str = "finney"
+    subtensor_endpoint: str = ""
     cache_ttl_metagraph: int = 300
     cache_ttl_price: int = 30
     cache_ttl_dynamic_info: int = 120

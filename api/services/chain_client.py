@@ -14,7 +14,10 @@ class ChainClient:
         self._subtensor: Optional[AsyncSubtensor] = None
 
     async def startup(self):
-        self._subtensor = AsyncSubtensor(network=settings.bittensor_network)
+        if settings.subtensor_endpoint:
+            self._subtensor = AsyncSubtensor(network=settings.subtensor_endpoint)
+        else:
+            self._subtensor = AsyncSubtensor(network=settings.bittensor_network)
         await self._subtensor.__aenter__()
 
     async def shutdown(self):
