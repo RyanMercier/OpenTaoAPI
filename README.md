@@ -2,7 +2,7 @@
 
 Open-source, self-hostable Bittensor network explorer and API. A drop-in alternative to TaoStats and TaoMarketCap.
 
-**No API-level rate limits** — unlike TaoStats (5 req/min free tier), your self-hosted instance has no request caps. The underlying subtensor RPC nodes (e.g. public Finney endpoints) do have their own connection limits. For heavy usage or production deployments, point OpenTaoAPI at your own subtensor node:
+**No API-level rate limits** unlike TaoStats (5 req/min free tier), your self-hosted instance has no request caps. The underlying subtensor RPC nodes (e.g. public Finney endpoints) do have their own connection limits. For heavy usage or production deployments, point OpenTaoAPI at your own subtensor node:
 
 ```bash
 SUBTENSOR_ENDPOINT=ws://your-node:9944
@@ -76,7 +76,7 @@ Response format matches the TaoStats `/api/miner/` endpoint. Includes coldkey ba
 ### Subnets
 
 ```
-GET /api/v1/subnets                         # All subnets with market cap, emission %, price, volume
+GET /api/v1/subnets                          # All subnets with market cap, emission %, price, volume
 GET /api/v1/subnet/{netuid}/info             # Subnet hyperparams and pool data
 GET /api/v1/subnet/{netuid}/neurons          # Paginated neuron list (?page=1&per_page=50)
 GET /api/v1/subnet/{netuid}/metagraph        # Full metagraph (?refresh=true to bypass cache)
@@ -87,7 +87,7 @@ GET /api/v1/subnet/{netuid}/validators       # Validators with stake, dividends,
 ### Neurons
 
 ```
-GET /api/v1/neuron/{netuid}/{uid}            # Single neuron by UID
+GET /api/v1/neuron/{netuid}/{uid}             # Single neuron by UID
 GET /api/v1/neuron/coldkey/{coldkey}          # All neurons for a coldkey
 GET /api/v1/neuron/hotkey/{hotkey}            # Neuron by hotkey
 ```
