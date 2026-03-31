@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 from api.models.schemas import SubnetInfoResponse, SubnetNeuronSummary, SubnetNeuronsResponse
 from api.services.calculations import calculate_emission
 from api.services.chain_client import ChainClient
+from api.services.metagraph_compat import meta_get, meta_get_uid
 from api.services.price_client import PriceClient
 
 router = APIRouter(tags=["subnet"])
@@ -19,6 +20,15 @@ def init_subnet_router(chain_client: ChainClient, price_client: PriceClient):
     _price_client = price_client
 
 
+def _get_axon(meta, uid: int) -> str:
+    if hasattr(meta, 'axons') and meta.axons and uid < len(meta.axons):
+        ax = meta.axons[uid]
+        if hasattr(ax, 'ip') and hasattr(ax, 'port'):
+            if ax.ip != "0.0.0.0":
+                return f"{ax.ip}:{ax.port}"
+    return ""
+
+
 @router.get("/subnet/{netuid}/info", response_model=SubnetInfoResponse)
 async def get_subnet_info(netuid: int):
     """Subnet hyperparameters, pool data, and basic stats."""
@@ -29,6 +39,9 @@ async def get_subnet_info(netuid: int):
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Chain query failed: {e}")
+
+    stake_vec = meta_get(meta, "S")
+    total_stake = float(sum(stake_vec)) if stake_vec is not None else 0.0
 
     return SubnetInfoResponse(
         netuid=netuid,
@@ -42,7 +55,7 @@ async def get_subnet_info(netuid: int):
         tao_in=float(dyn.tao_in),
         alpha_in=float(dyn.alpha_in),
         price=float(dyn.price),
-        total_stake=float(sum(meta.S)) if hasattr(meta, 'S') else 0.0,
+        total_stake=total_stake,
     )
 
 
@@ -64,23 +77,17 @@ async def get_subnet_neurons(
 
     neurons = []
     for uid in range(start, end):
-        axon = ""
-        if hasattr(meta, 'axons') and meta.axons and uid < len(meta.axons):
-            ax = meta.axons[uid]
-            if hasattr(ax, 'ip') and hasattr(ax, 'port'):
-                axon = f"{ax.ip}:{ax.port}"
-
         neurons.append(
             SubnetNeuronSummary(
                 uid=uid,
                 hotkey=meta.hotkeys[uid],
                 coldkey=meta.coldkeys[uid],
-                stake=float(meta.S[uid]),
-                incentive=float(meta.I[uid]),
-                consensus=float(meta.C[uid]),
-                trust=float(meta.T[uid]),
-                emission=float(meta.E[uid]),
-                axon=axon,
+                stake=meta_get_uid(meta, "S", uid),
+                incentive=meta_get_uid(meta, "I", uid),
+                consensus=meta_get_uid(meta, "C", uid),
+                trust=meta_get_uid(meta, "T", uid),
+                emission=meta_get_uid(meta, "E", uid),
+                axon=_get_axon(meta, uid),
             )
         )
 
@@ -98,7 +105,7 @@ async def get_subnet_metagraph(
     netuid: int,
     refresh: bool = Query(False),
 ):
-    """Full metagraph data for all neurons. Use ?refresh=true to bypass cache."""
+    """Full metagraph data for all neurons."""
     try:
         meta = await _chain_client.get_metagraph(netuid, force_refresh=refresh)
         dyn = await _chain_client.get_dynamic_info(netuid)
@@ -109,36 +116,34 @@ async def get_subnet_metagraph(
     alpha_in = float(dyn.alpha_in)
     rate = tao_in / alpha_in if alpha_in > 0 else 0.0
 
+    active_vec = meta_get(meta, "active")
+    last_update_vec = meta_get(meta, "last_update")
+    vp_vec = meta_get(meta, "validator_permit")
+
     neurons = []
     for uid in range(meta.n):
-        axon = ""
-        if hasattr(meta, 'axons') and meta.axons and uid < len(meta.axons):
-            ax = meta.axons[uid]
-            if hasattr(ax, 'ip') and hasattr(ax, 'port'):
-                axon = f"{ax.ip}:{ax.port}"
-
         neurons.append({
             "uid": uid,
             "hotkey": meta.hotkeys[uid],
             "coldkey": meta.coldkeys[uid],
-            "stake": float(meta.S[uid]),
-            "incentive": float(meta.I[uid]),
-            "consensus": float(meta.C[uid]),
-            "trust": float(meta.T[uid]),
-            "emission": float(meta.E[uid]),
-            "dividends": float(meta.D[uid]) if hasattr(meta, 'D') else 0.0,
-            "rank": float(meta.R[uid]) if hasattr(meta, 'R') else 0.0,
-            "axon": axon,
-            "active": bool(meta.active[uid]) if hasattr(meta, 'active') else True,
-            "last_update": int(meta.last_update[uid]) if hasattr(meta, 'last_update') else 0,
-            "validator_permit": bool(meta.validator_permit[uid]) if hasattr(meta, 'validator_permit') else False,
+            "stake": meta_get_uid(meta, "S", uid),
+            "incentive": meta_get_uid(meta, "I", uid),
+            "consensus": meta_get_uid(meta, "C", uid),
+            "trust": meta_get_uid(meta, "T", uid),
+            "emission": meta_get_uid(meta, "E", uid),
+            "dividends": meta_get_uid(meta, "D", uid),
+            "rank": meta_get_uid(meta, "R", uid),
+            "axon": _get_axon(meta, uid),
+            "active": bool(active_vec[uid]) if active_vec is not None else True,
+            "last_update": int(last_update_vec[uid]) if last_update_vec is not None else 0,
+            "validator_permit": bool(vp_vec[uid]) if vp_vec is not None else False,
         })
 
     return {
         "netuid": netuid,
-        "block": meta.block,
-        "n": meta.n,
-        "tempo": meta.tempo,
+        "block": int(meta.block),
+        "n": int(meta.n),
+        "tempo": int(meta.tempo),
         "alpha_to_tao_rate": rate,
         "tao_in": tao_in,
         "alpha_in": alpha_in,
@@ -154,7 +159,7 @@ async def get_subnet_miners(
     page: int = Query(1, ge=1),
     per_page: int = Query(256, ge=1, le=512),
 ):
-    """Miners table with computed daily emission. Filters to non-validator neurons."""
+    """Miners table with computed daily emission."""
     try:
         meta, dyn, tao_price = await asyncio.gather(
             _chain_client.get_metagraph(netuid),
@@ -170,18 +175,20 @@ async def get_subnet_miners(
     subnet_name = getattr(dyn, 'subnet_name', '') or getattr(dyn, 'name', '')
     symbol = getattr(dyn, 'symbol', '')
 
+    vp_vec = meta_get(meta, "validator_permit")
+    alpha_stake_vec = meta_get(meta, "alpha_stake")
+    if alpha_stake_vec is None:
+        alpha_stake_vec = meta_get(meta, "S")
+
     miners = []
     for uid in range(meta.n):
-        is_validator = (
-            hasattr(meta, 'validator_permit')
-            and bool(meta.validator_permit[uid])
-        )
+        is_validator = bool(vp_vec[uid]) if vp_vec is not None else False
         if is_validator:
             continue
 
-        e = float(meta.E[uid])
-        incentive = float(meta.I[uid])
-        stake = float(meta.alpha_stake[uid]) if hasattr(meta, 'alpha_stake') else float(meta.S[uid])
+        e = meta_get_uid(meta, "E", uid)
+        incentive = meta_get_uid(meta, "I", uid)
+        stake = float(alpha_stake_vec[uid]) if alpha_stake_vec is not None else 0.0
 
         if e > 0:
             em = calculate_emission(e, meta.tempo, tao_in, alpha_in, tao_price)
@@ -193,17 +200,11 @@ async def get_subnet_miners(
             daily_tao = 0.0
             daily_usd = 0.0
 
-        axon = ""
-        if hasattr(meta, 'axons') and meta.axons and uid < len(meta.axons):
-            ax = meta.axons[uid]
-            if hasattr(ax, 'ip') and hasattr(ax, 'port') and ax.ip != "0.0.0.0":
-                axon = f"{ax.ip}:{ax.port}"
-
         miners.append({
             "uid": uid,
             "hotkey": meta.hotkeys[uid],
             "coldkey": meta.coldkeys[uid],
-            "axon": axon,
+            "axon": _get_axon(meta, uid),
             "incentive": incentive,
             "stake": stake,
             "stake_as_tao": stake * rate,
@@ -211,7 +212,7 @@ async def get_subnet_miners(
             "daily_alpha": daily_alpha,
             "daily_tao": daily_tao,
             "daily_usd": daily_usd,
-            "trust": float(meta.T[uid]),
+            "trust": meta_get_uid(meta, "T", uid),
         })
 
     # Sort
@@ -221,9 +222,7 @@ async def get_subnet_miners(
 
     # Assign rank by incentive (descending)
     by_incentive = sorted(miners, key=lambda m: m["incentive"], reverse=True)
-    rank_map = {}
-    for i, m in enumerate(by_incentive):
-        rank_map[m["uid"]] = i + 1
+    rank_map = {m["uid"]: i + 1 for i, m in enumerate(by_incentive)}
     for m in miners:
         m["rank"] = rank_map[m["uid"]]
 
@@ -269,24 +268,27 @@ async def get_subnet_validators(
     subnet_name = getattr(dyn, 'subnet_name', '') or getattr(dyn, 'name', '')
     symbol = getattr(dyn, 'symbol', '')
 
-    # Total alpha stake across all validators (for dominance %)
-    total_alpha_all = 0.0
+    vp_vec = meta_get(meta, "validator_permit")
+    alpha_stake_vec = meta_get(meta, "alpha_stake")
+    if alpha_stake_vec is None:
+        alpha_stake_vec = meta_get(meta, "S")
+    tao_stake_vec = meta_get(meta, "tao_stake")
+    last_update_vec = meta_get(meta, "last_update")
 
+    total_alpha_all = 0.0
     validators = []
+
     for uid in range(meta.n):
-        is_validator = (
-            hasattr(meta, 'validator_permit')
-            and bool(meta.validator_permit[uid])
-        )
+        is_validator = bool(vp_vec[uid]) if vp_vec is not None else False
         if not is_validator:
             continue
 
-        e = float(meta.E[uid])
-        dividends = float(meta.D[uid]) if hasattr(meta, 'D') else 0.0
-        vtrust = float(meta.Tv[uid]) if hasattr(meta, 'Tv') else 0.0
-        stake = float(meta.alpha_stake[uid]) if hasattr(meta, 'alpha_stake') else 0.0
-        tao_stake = float(meta.tao_stake[uid]) if hasattr(meta, 'tao_stake') else 0.0
-        last_update = int(meta.last_update[uid]) if hasattr(meta, 'last_update') else 0
+        e = meta_get_uid(meta, "E", uid)
+        dividends = meta_get_uid(meta, "D", uid)
+        vtrust = meta_get_uid(meta, "Tv", uid)
+        stake = float(alpha_stake_vec[uid]) if alpha_stake_vec is not None else 0.0
+        tao_stake = float(tao_stake_vec[uid]) if tao_stake_vec is not None else 0.0
+        last_update = int(last_update_vec[uid]) if last_update_vec is not None else 0
 
         total_alpha_all += stake
 
@@ -300,19 +302,13 @@ async def get_subnet_validators(
             daily_tao = 0.0
             daily_usd = 0.0
 
-        axon = ""
-        if hasattr(meta, 'axons') and meta.axons and uid < len(meta.axons):
-            ax = meta.axons[uid]
-            if hasattr(ax, 'ip') and hasattr(ax, 'port') and ax.ip != "0.0.0.0":
-                axon = f"{ax.ip}:{ax.port}"
-
-        total_stake_tao = tao_stake + (stake * rate)  # TAO stake + alpha converted to TAO
+        total_stake_tao = tao_stake + (stake * rate)
 
         validators.append({
             "uid": uid,
             "hotkey": meta.hotkeys[uid],
             "coldkey": meta.coldkeys[uid],
-            "axon": axon,
+            "axon": _get_axon(meta, uid),
             "dividends": dividends,
             "vtrust": vtrust,
             "stake": stake,
@@ -323,24 +319,19 @@ async def get_subnet_validators(
             "daily_tao": daily_tao,
             "daily_usd": daily_usd,
             "last_update": int(meta.block - last_update) if last_update > 0 else 0,
-            "trust": float(meta.T[uid]),
-            "consensus": float(meta.C[uid]),
+            "trust": meta_get_uid(meta, "T", uid),
+            "consensus": meta_get_uid(meta, "C", uid),
         })
 
-    # Compute dominance %
     for v in validators:
         v["dominance"] = (v["stake"] / total_alpha_all * 100) if total_alpha_all > 0 else 0.0
 
-    # Sort
     reverse = order == "desc"
     sort_key = sort if sort != "emission" else "emission_alpha"
     validators.sort(key=lambda v: v.get(sort_key, 0), reverse=reverse)
 
-    # Assign rank by stake (descending)
     by_stake = sorted(validators, key=lambda v: v["stake"], reverse=True)
-    rank_map = {}
-    for i, v in enumerate(by_stake):
-        rank_map[v["uid"]] = i + 1
+    rank_map = {v["uid"]: i + 1 for i, v in enumerate(by_stake)}
     for v in validators:
         v["rank"] = rank_map[v["uid"]]
 
@@ -376,7 +367,6 @@ async def get_all_subnets(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Chain query failed: {e}")
 
-    # Compute total pending emission across all subnets for emission share %
     total_pending = sum(
         float(sn.pending_alpha_emission) * float(sn.price)
         for sn in all_sn if sn.netuid != 0
@@ -389,15 +379,10 @@ async def get_all_subnets(
         alpha_in = float(sn.alpha_in)
         alpha_out = float(sn.alpha_out)
 
-        # Market cap = tao_in for dynamic subnets (AMM pool TAO side)
-        # For SN0, use tao_in directly
         market_cap_tao = tao_in
         market_cap_usd = market_cap_tao * tao_price
-
-        # Circulating supply = alpha_out (tokens outside the pool)
         supply = alpha_out
 
-        # Emission share: this subnet's pending emission as % of total
         pending = float(sn.pending_alpha_emission)
         if sn.netuid == 0:
             emission_pct = 0.0
@@ -406,7 +391,6 @@ async def get_all_subnets(
         else:
             emission_pct = 0.0
 
-        # Volume
         volume = float(sn.subnet_volume) if hasattr(sn, 'subnet_volume') else 0.0
         volume_tao = volume * price if sn.netuid != 0 else volume
 
@@ -420,23 +404,18 @@ async def get_all_subnets(
             "market_cap_tao": market_cap_tao,
             "market_cap_usd": market_cap_usd,
             "supply": supply,
-            "supply_pct": 0,  # placeholder
+            "supply_pct": 0,
             "volume_tao": volume_tao,
             "volume_usd": volume_tao * tao_price,
             "tempo": sn.tempo,
             "is_dynamic": sn.is_dynamic if hasattr(sn, 'is_dynamic') else True,
         })
 
-    # Sort
     reverse = order == "desc"
     key_map = {
-        "netuid": "netuid",
-        "name": "name",
-        "price": "price",
-        "market_cap": "market_cap_tao",
-        "emission": "emission_pct",
-        "supply": "supply",
-        "volume": "volume_tao",
+        "netuid": "netuid", "name": "name", "price": "price",
+        "market_cap": "market_cap_tao", "emission": "emission_pct",
+        "supply": "supply", "volume": "volume_tao",
     }
     sort_key = key_map.get(sort, "market_cap_tao")
     subnets.sort(
@@ -444,11 +423,9 @@ async def get_all_subnets(
         reverse=reverse,
     )
 
-    # Assign rank
     for i, s in enumerate(subnets):
         s["rank"] = i + 1
 
-    # Summary
     sum_prices = sum(s["price"] for s in subnets)
 
     return {

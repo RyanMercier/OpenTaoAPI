@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +18,12 @@ from api.routes.neuron import router as neuron_router, init_neuron_router
 from api.routes.subnet import router as subnet_router, init_subnet_router
 from api.routes.emissions import router as emissions_router, init_emissions_router
 from api.routes.portfolio import router as portfolio_router, init_portfolio_router
+
+# Configure logging so errors show in docker logs / stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 cache = TTLCache()
 chain_client = ChainClient(cache)

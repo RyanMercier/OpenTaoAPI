@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from api.models.schemas import PortfolioResponse, PortfolioSubnet
 from api.services.calculations import calculate_emission
 from api.services.chain_client import ChainClient
+from api.services.metagraph_compat import meta_get, meta_get_uid
 from api.services.price_client import PriceClient
 
 router = APIRouter(tags=["portfolio"])
@@ -22,8 +23,7 @@ def init_portfolio_router(chain_client: ChainClient, price_client: PriceClient):
 
 @router.get("/portfolio/{coldkey}", response_model=PortfolioResponse)
 async def get_portfolio(coldkey: str):
-    """Full cross-subnet portfolio for a coldkey. Returns total balance, free/staked breakdown,
-    per-subnet alpha balances with TAO conversion, and estimated daily yield from mining/validation."""
+    """Full cross-subnet portfolio for a coldkey."""
     try:
         balance, stakes, tao_price = await asyncio.gather(
             _chain_client.get_balance(coldkey),
@@ -33,8 +33,9 @@ async def get_portfolio(coldkey: str):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Chain query failed: {e}")
 
+    free_tao = float(balance.tao) if hasattr(balance, 'tao') else float(balance)
+
     if not stakes:
-        free_tao = float(balance.tao)
         return PortfolioResponse(
             coldkey=coldkey,
             total_balance_tao=free_tao,
@@ -53,9 +54,10 @@ async def get_portfolio(coldkey: str):
 
     netuids = list(by_netuid.keys())
 
-    # Fetch dynamic info + metagraphs for registered subnets concurrently
     registered_netuids = [
-        n for n in netuids if any(s.is_registered for s in by_netuid[n])
+        n for n in netuids if any(
+            getattr(s, 'is_registered', True) for s in by_netuid[n]
+        )
     ]
 
     try:
@@ -78,7 +80,6 @@ async def get_portfolio(coldkey: str):
         if not isinstance(r, Exception):
             metas[n] = r
 
-    free_tao = float(balance.tao)
     total_staked_tao = 0.0
     subnets = []
 
@@ -112,34 +113,33 @@ async def get_portfolio(coldkey: str):
         total_staked_tao += total_tao
         hotkey_count = len(subnet_stakes)
 
-        # Compute daily yield using metagraph emission data
+        # Compute daily yield
         daily_yield_tao = 0.0
         meta = metas.get(n)
         if meta:
             hotkey_to_uid = {meta.hotkeys[uid]: uid for uid in range(meta.n)}
-            # SN0 emission is already TAO, not alpha
             em_tao_in = 1.0 if n == 0 else tao_in
             em_alpha_in = 1.0 if n == 0 else alpha_in
 
+            vp_vec = meta_get(meta, "validator_permit")
+            alpha_stake_vec = meta_get(meta, "alpha_stake")
+            if alpha_stake_vec is None:
+                alpha_stake_vec = meta_get(meta, "S")
+
             for s in subnet_stakes:
                 uid = hotkey_to_uid.get(s.hotkey_ss58)
-                if uid is None or float(meta.E[uid]) <= 0:
+                if uid is None or meta_get_uid(meta, "E", uid) <= 0:
                     continue
 
                 em = calculate_emission(
-                    float(meta.E[uid]), meta.tempo,
+                    meta_get_uid(meta, "E", uid), meta.tempo,
                     em_tao_in, em_alpha_in, tao_price,
                 )
 
-                # meta.E[uid] is total emission for the neuron.
-                # For validators, scale by this coldkey's stake share.
-                # For miners, the full emission belongs to the miner operator.
-                is_validator = (
-                    hasattr(meta, 'validator_permit')
-                    and bool(meta.validator_permit[uid])
-                )
+                is_validator = bool(vp_vec[uid]) if vp_vec is not None else False
+
                 if is_validator:
-                    total_stake = float(meta.alpha_stake[uid])
+                    total_stake = float(alpha_stake_vec[uid]) if alpha_stake_vec is not None else 0.0
                     my_stake = float(s.stake)
                     share = my_stake / total_stake if total_stake > 0 else 0.0
                     daily_yield_tao += em.daily_tao * share
@@ -159,9 +159,7 @@ async def get_portfolio(coldkey: str):
             daily_yield_usd=daily_yield_tao * tao_price,
         ))
 
-    # Sort by balance_tao descending
     subnets.sort(key=lambda s: s.balance_tao, reverse=True)
-
     total_balance_tao = free_tao + total_staked_tao
 
     return PortfolioResponse(

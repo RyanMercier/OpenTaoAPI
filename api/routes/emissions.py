@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from api.models.schemas import EmissionResponse
 from api.services.calculations import calculate_emission
 from api.services.chain_client import ChainClient
+from api.services.metagraph_compat import meta_get_uid
 from api.services.price_client import PriceClient
 
 router = APIRouter(tags=["emissions"])
@@ -21,7 +22,7 @@ def init_emissions_router(chain_client: ChainClient, price_client: PriceClient):
 
 @router.get("/emissions/{netuid}/{uid}", response_model=EmissionResponse)
 async def get_emissions(netuid: int, uid: int):
-    """Emission breakdown for a neuron: alpha/block, TAO/block, daily/monthly estimates in alpha, TAO, and USD."""
+    """Emission breakdown for a neuron."""
     try:
         meta, dyn, tao_price = await asyncio.gather(
             _chain_client.get_metagraph(netuid),
@@ -39,7 +40,7 @@ async def get_emissions(netuid: int, uid: int):
     rate = tao_in / alpha_in if alpha_in > 0 else 0.0
 
     em = calculate_emission(
-        meta_e_uid=float(meta.E[uid]),
+        meta_e_uid=meta_get_uid(meta, "E", uid),
         tempo=meta.tempo,
         tao_in=tao_in,
         alpha_in=alpha_in,
