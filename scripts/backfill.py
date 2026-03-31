@@ -99,8 +99,8 @@ async def run_backfill(args):
     db = Database(args.db_path)
     await db.startup()
 
-    # Connect to chain
-    network = args.endpoint or settings.subtensor_endpoint or settings.bittensor_network
+    # Connect to archive node for historical queries
+    network = args.endpoint or settings.archive_endpoint
     print(f"Connecting to {network}...")
 
     async with AsyncSubtensor(network=network) as subtensor:

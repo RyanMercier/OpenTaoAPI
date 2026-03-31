@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
     bittensor_network: str = "finney"
+    archive_endpoint: str = "wss://archive.chain.opentensor.ai:443/"
     subtensor_endpoint: str = ""
     cache_ttl_metagraph: int = 300
     cache_ttl_price: int = 30

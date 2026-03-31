@@ -126,8 +126,9 @@ app = FastAPI(
         "**Data sources:** Bittensor chain (AsyncSubtensor) + MEXC (TAO price)\n\n"
         "**Web UI:** Portfolio viewer at `/`, subnets at `/subnets`, "
         "miners/validators at `/subnet/{netuid}/miners`\n\n"
-        "**Historical data:** Backfill with `python -m scripts.backfill`, "
-        "live snapshots every 30min by default."
+        "**Historical data:** Daily snapshots back to Feb 2025 (SQLite). "
+        "Backfill with `python -m scripts.backfill_taostats --all-subnets`, "
+        "live polling every 30min."
     ),
     version="0.3.0",
     lifespan=lifespan,

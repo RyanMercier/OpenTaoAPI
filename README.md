@@ -16,6 +16,8 @@ SUBTENSOR_ENDPOINT=ws://your-node:9944
 - TaoStats-compatible `/miner/` endpoint for drop-in replacement
 - Web dashboard: portfolio viewer, subnets overview, miners/validators tables
 - Direct chain queries via Bittensor SDK (no third-party APIs except MEXC for price)
+- Historical data: SQLite storage with epoch-resolution snapshots via public archive node, live polling
+- Backfill script pulls directly from chain — no third-party API needed
 - In-memory caching with configurable TTLs
 - Self-hostable with Docker or conda
 
@@ -100,6 +102,30 @@ GET /api/v1/emissions/{netuid}/{uid}
 
 Emission breakdown: alpha per epoch, alpha per block, TAO per block, daily/monthly estimates in alpha, TAO, and USD.
 
+### Historical Data
+
+```
+GET /api/v1/history/{netuid}/price?hours=720      # Alpha price history (last 30 days)
+GET /api/v1/history/{netuid}/snapshots?hours=168   # Full snapshots (last 7 days)
+GET /api/v1/history/{netuid}/stats                 # Data coverage stats
+```
+
+Historical data is stored in SQLite. The backfill script queries the public archive node (`wss://archive.chain.opentensor.ai`) at epoch-level resolution (~30 min intervals). The live poller adds new snapshots every 30 minutes going forward.
+
+```bash
+# Backfill last 30 days at epoch resolution (~600 snapshots per subnet)
+python -m scripts.backfill --netuid 51 --days 30
+
+# Backfill from a specific block
+python -m scripts.backfill --netuid 51 --start-block 5000000
+
+# Resume from where you left off
+python -m scripts.backfill --netuid 51 --resume
+
+# Include metagraph data (stake, emissions, neuron count — slower)
+python -m scripts.backfill --netuid 51 --days 7 --full
+```
+
 ## Usage Examples
 
 ### curl
@@ -125,6 +151,12 @@ curl http://localhost:8000/api/v1/miner/5GEP69yPWi3qB2tLQdsbv3Fa2JA6wH6szFNP77Eq
 
 # Emission breakdown for subnet 51, UID 40
 curl http://localhost:8000/api/v1/emissions/51/40
+
+# Historical alpha price for subnet 51 (last 30 days)
+curl "http://localhost:8000/api/v1/history/51/price?hours=720"
+
+# Historical data coverage stats
+curl http://localhost:8000/api/v1/history/51/stats
 ```
 
 ### Python
@@ -166,6 +198,10 @@ All settings via environment variables (or `.env` file):
 | `CACHE_TTL_PRICE` | `30` | Price cache seconds |
 | `CACHE_TTL_DYNAMIC_INFO` | `120` | Subnet pool data cache seconds |
 | `CACHE_TTL_BALANCE` | `60` | Balance/stake cache seconds |
+| `ARCHIVE_ENDPOINT` | `wss://archive.chain.opentensor.ai:443/` | Archive node for historical backfill |
+| `DATABASE_PATH` | `data/opentao.db` | SQLite database path for historical data |
+| `HISTORY_POLL_INTERVAL` | `1800` | Seconds between live snapshots (0 to disable) |
+| `HISTORY_POLL_NETUIDS` | _(empty)_ | Comma-separated netuids to poll (empty = all active) |
 | `API_HOST` | `0.0.0.0` | Bind address |
 | `API_PORT` | `8000` | Port |
 
@@ -182,14 +218,22 @@ OpenTaoAPI/
 │   │   ├── neuron.py           # Neuron lookup by UID/hotkey/coldkey
 │   │   ├── subnet.py           # Subnet info, metagraph, miners, validators
 │   │   ├── emissions.py        # Emission breakdown
-│   │   └── portfolio.py        # Cross-subnet portfolio
+│   │   ├── portfolio.py        # Cross-subnet portfolio
+│   │   └── history.py          # Historical data endpoints
 │   ├── services/
 │   │   ├── chain_client.py     # Bittensor SDK wrapper (AsyncSubtensor)
 │   │   ├── price_client.py     # MEXC price feed
 │   │   ├── cache.py            # In-memory TTL cache
+│   │   ├── database.py         # SQLite storage for historical data
+│   │   ├── metagraph_compat.py # SDK version compatibility layer
 │   │   └── calculations.py     # Emission math
 │   └── models/
 │       └── schemas.py          # Pydantic response models
+├── scripts/
+│   ├── backfill.py             # Historical scraper (chain-direct)
+│   └── backfill_taostats.py    # Historical scraper (TaoStats API)
+├── data/
+│   └── opentao.db              # SQLite database (created on first run)
 ├── frontend/
 │   ├── index.html              # Portfolio dashboard
 │   ├── subnets.html            # Subnets overview
@@ -229,7 +273,7 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 | Self-hostable | No | Yes |
 | Miner endpoint | `/api/miner/{coldkey}/{netuid}` | `/api/v1/miner/{coldkey}/{netuid}` (compatible format) |
 | Web UI | Full explorer | Portfolio, subnets, miners/validators |
-| Historical data | Yes | Not yet (current state only) |
+| Historical data | Yes | Yes (SQLite, epoch-resolution via archive node) |
 | Price source | Multiple | MEXC |
 
 ## Support
