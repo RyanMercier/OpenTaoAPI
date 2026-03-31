@@ -187,3 +187,35 @@ class PortfolioResponse(BaseModel):
     total_balance_usd: float
     subnet_count: int
     subnets: list[PortfolioSubnet]
+
+
+# --- History endpoints ---
+
+class PricePoint(BaseModel):
+    block: int
+    timestamp: str
+    alpha_price_tao: Optional[float] = None
+    tao_price_usd: Optional[float] = None
+
+
+class SnapshotPoint(BaseModel):
+    block: int
+    timestamp: str
+    netuid: int
+    alpha_price_tao: Optional[float] = None
+    tao_price_usd: Optional[float] = None
+    tao_in: Optional[float] = None
+    alpha_in: Optional[float] = None
+    total_stake: Optional[float] = None
+    emission_rate: Optional[float] = None
+    validator_count: Optional[int] = None
+    neuron_count: Optional[int] = None
+
+
+class HistoryStatsResponse(BaseModel):
+    netuid: int
+    earliest_block: Optional[int] = None
+    latest_block: Optional[int] = None
+    earliest_time: Optional[str] = None
+    latest_time: Optional[str] = None
+    total_snapshots: int

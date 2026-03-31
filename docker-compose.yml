@@ -3,10 +3,14 @@ services:
     build: .
     ports:
       - "8000:8000"
+    volumes:
+      - ./data:/app/data
     environment:
       - BITTENSOR_NETWORK=finney
       - CACHE_TTL_METAGRAPH=300
       - CACHE_TTL_PRICE=30
       - CACHE_TTL_DYNAMIC_INFO=120
       - CACHE_TTL_BALANCE=60
+      - DATABASE_PATH=data/opentao.db
+      - HISTORY_POLL_INTERVAL=1800
     restart: unless-stopped

@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     cache_ttl_price: int = 30
     cache_ttl_dynamic_info: int = 120
     cache_ttl_balance: int = 60
+    database_path: str = "data/opentao.db"
+    history_poll_interval: int = 1800  # seconds between live snapshots
+    history_poll_netuids: str = ""  # comma-separated, empty = all active
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
