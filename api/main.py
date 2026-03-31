@@ -80,10 +80,31 @@ async def _snapshot_all_subnets():
 
 
 async def _live_poller():
-    """Background task that periodically snapshots subnet state."""
+    """Background task that snapshots subnet state.
+
+    Modes controlled by HISTORY_POLL_INTERVAL:
+      > 0  — poll every N seconds (default 1800 = 30min)
+      = 0  — disabled
+      = -1 — every block (~12s), subscribes to new block headers
+    """
     interval = settings.history_poll_interval
-    if interval <= 0:
+
+    if interval == 0:
         logger.info("Live history polling disabled (interval=0)")
+        return
+
+    if interval == -1:
+        logger.info("Live history poller started (every block)")
+        last_block = 0
+        while True:
+            try:
+                block = await chain_client.get_current_block()
+                if block != last_block:
+                    last_block = block
+                    await _snapshot_all_subnets()
+            except Exception as e:
+                logger.error(f"Block poller error: {e}")
+            await asyncio.sleep(12)  # block time ~12s
         return
 
     logger.info(f"Live history poller started (every {interval}s)")
