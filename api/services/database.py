@@ -51,7 +51,7 @@ class Database:
     async def insert_snapshot(self, data: dict) -> bool:
         """Insert a snapshot row. Returns True if inserted, False if duplicate."""
         try:
-            await self._db.execute(
+            cursor = await self._db.execute(
                 """INSERT OR IGNORE INTO subnet_snapshots
                    (block, timestamp, netuid, alpha_price_tao, tao_price_usd,
                     tao_in, alpha_in, total_stake, emission_rate,
@@ -72,7 +72,7 @@ class Database:
                 ),
             )
             await self._db.commit()
-            return self._db.total_changes > 0
+            return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"Failed to insert snapshot: {e}")
             return False

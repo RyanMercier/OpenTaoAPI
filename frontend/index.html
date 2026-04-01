@@ -4,63 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenTaoAPI</title>
+<link rel="stylesheet" href="/static/common.css">
 <style>
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
-:root {
-  --bg: #0a0a0a;
-  --bg-raised: #111;
-  --border: #1e1e1e;
-  --text: #c8c8c8;
-  --text-dim: #666;
-  --text-bright: #e8e8e8;
-  --accent: #00d4aa;
-  --red: #e84855;
-  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-}
-
-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--sans);
-  font-size: 14px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-}
-
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-.container {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 0 20px;
-}
-
-/* Header */
-header {
-  border-bottom: 1px solid var(--border);
-  padding: 16px 0;
-}
-
-header .inner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.logo {
-  font-family: var(--mono);
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-bright);
-  white-space: nowrap;
-  letter-spacing: -0.3px;
-}
-
-.logo span { color: var(--accent); }
 
 .search-form {
   display: flex;
@@ -112,35 +57,6 @@ header .inner {
   padding: 2px 6px;
 }
 
-/* Loading */
-.loading {
-  text-align: center;
-  padding: 80px 20px;
-  color: var(--text-dim);
-}
-
-.loading .spinner {
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin-bottom: 16px;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.loading p { font-size: 13px; }
-
-/* Error */
-.error-msg {
-  text-align: center;
-  padding: 60px 20px;
-  color: var(--red);
-  font-size: 13px;
-}
 
 /* Portfolio */
 .portfolio { padding: 32px 0 64px; }
@@ -264,21 +180,6 @@ header .inner {
 /* Free TAO row */
 .free-row td { color: var(--text-dim); }
 
-/* Footer */
-footer {
-  border-top: 1px solid var(--border);
-  padding: 16px 0;
-  text-align: center;
-}
-
-footer p {
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-footer a { color: var(--text-dim); }
-footer a:hover { color: var(--text); }
-
 /* Responsive */
 @media (max-width: 640px) {
   .balance-tao { font-size: 24px; }
@@ -316,7 +217,7 @@ footer a:hover { color: var(--text); }
     <p>
       <a href="/subnets">Subnets</a> &middot;
       <a href="/docs">API Docs</a> &middot;
-      <a href="https://github.com">Source</a> &middot;
+      <a href="https://github.com/ryanmercier/OpenTaoAPI">Source</a> &middot;
       Powered by <a href="https://bittensor.com">Bittensor</a> + MEXC
     </p>
   </div>

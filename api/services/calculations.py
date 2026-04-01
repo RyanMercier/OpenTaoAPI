@@ -56,6 +56,3 @@ def to_rao_string(value: float) -> str:
     return str(int(value * 1e9))
 
 
-def balance_rao_string(balance) -> str:
-    """Convert a bittensor Balance object to RAO string."""
-    return str(int(balance.rao))

@@ -27,11 +27,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.config import settings
+from api.services.calculations import BLOCKS_PER_DAY
 from api.services.database import Database
 
-BLOCKS_PER_DAY = 7200
 MAX_RETRIES = 3
-RETRY_BACKOFF = 5  # seconds, doubles each retry
+RETRY_BACKOFF = 5
 
 
 async def scrape_block(subtensor, netuid: int, block: int, full: bool = False):

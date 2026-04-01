@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -27,6 +28,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+BLOCK_TIME_SECONDS = 12
 
 cache = TTLCache()
 chain_client = ChainClient(cache)
@@ -56,7 +59,6 @@ async def _snapshot_all_subnets():
             alpha_in = float(sn.alpha_in)
             price = tao_in / alpha_in if alpha_in > 0 else (1.0 if sn.netuid == 0 else 0.0)
 
-            from datetime import datetime, timezone
             snapshot = {
                 "block": block,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -104,7 +106,7 @@ async def _live_poller():
                     await _snapshot_all_subnets()
             except Exception as e:
                 logger.error(f"Block poller error: {e}")
-            await asyncio.sleep(12)  # block time ~12s
+            await asyncio.sleep(BLOCK_TIME_SECONDS)
         return
 
     logger.info(f"Live history poller started (every {interval}s)")
@@ -147,9 +149,9 @@ app = FastAPI(
         "**Data sources:** Bittensor chain (AsyncSubtensor) + MEXC (TAO price)\n\n"
         "**Web UI:** Portfolio viewer at `/`, subnets at `/subnets`, "
         "miners/validators at `/subnet/{netuid}/miners`\n\n"
-        "**Historical data:** Daily snapshots back to Feb 2025 (SQLite). "
-        "Backfill with `python -m scripts.backfill_taostats --all-subnets`, "
-        "live polling every 30min."
+        "**Historical data:** Epoch-resolution snapshots via archive node (SQLite). "
+        "Backfill with `python -m scripts.backfill --all-subnets --start-block 3000000`. "
+        "Live polling every 30min or every block."
     ),
     version="0.3.0",
     lifespan=lifespan,

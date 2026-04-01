@@ -1,17 +1,14 @@
 """
-Compatibility layer for different bittensor SDK versions.
+Compatibility layer for bittensor SDK metagraph attribute names.
 
-Older SDK uses short metagraph attribute names: T, C, I, E, S, D, R
-Newer SDK (AsyncMetagraph) uses full names: trust, consensus, incentive, emission, ...
-
-This module provides safe access that works with both.
+Older SDK versions use short names (T, C, I, E, S, D, R) while newer
+versions use full names (trust, consensus, incentive, emission, ...).
 """
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Short name → list of possible attribute names (tried in order)
 _METAGRAPH_ALIASES = {
     "T": ["T", "trust"],
     "C": ["C", "consensus"],
@@ -27,20 +24,11 @@ _logged_mappings: set[str] = set()
 
 
 def meta_get(meta, attr: str):
-    """Get a metagraph vector attribute, handling SDK version differences.
-
-    Usage:
-        trust_vector = meta_get(meta, "T")
-        trust_uid = meta_get(meta, "T")[uid]
-
-    Returns the vector/array, or None if not found.
-    """
-    # Try exact name first
+    """Get a metagraph vector by name, resolving SDK version differences."""
     val = getattr(meta, attr, None)
     if val is not None:
         return val
 
-    # Try aliases
     for alias in _METAGRAPH_ALIASES.get(attr, []):
         val = getattr(meta, alias, None)
         if val is not None:
@@ -54,14 +42,7 @@ def meta_get(meta, attr: str):
 
 
 def meta_get_uid(meta, attr: str, uid: int, default: float = 0.0) -> float:
-    """Get a single neuron's value from a metagraph vector.
-
-    Usage:
-        trust = meta_get_uid(meta, "T", uid)
-        incentive = meta_get_uid(meta, "I", uid)
-
-    Returns float, or default if attribute not found.
-    """
+    """Get a single neuron's scalar value from a metagraph vector."""
     vec = meta_get(meta, attr)
     if vec is not None:
         try:

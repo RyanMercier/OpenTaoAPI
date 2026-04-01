@@ -1,8 +1,7 @@
+from __future__ import annotations
+
 from pydantic import BaseModel
-from typing import Optional
 
-
-# --- TaoStats-compatible miner endpoint models ---
 
 class ColdkeyInfo(BaseModel):
     ss58: str
@@ -10,6 +9,7 @@ class ColdkeyInfo(BaseModel):
 
 
 class HotkeyInfo(BaseModel):
+    """TaoStats-compatible hotkey detail within a miner response."""
     hotkey: ColdkeyInfo
     coldkey: ColdkeyInfo
     netuid: int
@@ -17,27 +17,27 @@ class HotkeyInfo(BaseModel):
     immune: bool
     in_danger: bool
     deregistered: bool
-    deregistration_timestamp: Optional[str] = None
-    alpha_balance: str  # RAO string
-    alpha_balance_as_tao: str  # RAO string
-    trust: str  # float as string
-    consensus: str  # float as string
-    incentive: str  # float as string
+    deregistration_timestamp: str | None = None
+    alpha_balance: str
+    alpha_balance_as_tao: str
+    trust: str
+    consensus: str
+    incentive: str
     mech_incentive: list[str]
-    emission: str  # alpha per epoch, RAO string
-    total_emission: str  # cumulative alpha, RAO string
-    total_emission_as_tao: str  # cumulative tao equivalent, RAO string
-    axon: str  # ip:port
+    emission: str
+    total_emission: str
+    total_emission_as_tao: str
+    axon: str
     registration_block: int
-    miner_rank: Optional[int] = None
-    validator_rank: Optional[int] = None
+    miner_rank: int | None = None
+    validator_rank: int | None = None
 
 
 class AlphaBalance(BaseModel):
-    balance: str  # RAO string (alpha)
-    balance_as_tao: str  # RAO string (tao equivalent)
-    hotkey: str  # ss58
-    coldkey: str  # ss58
+    balance: str
+    balance_as_tao: str
+    hotkey: str
+    coldkey: str
     netuid: int
 
 
@@ -46,14 +46,15 @@ class Pagination(BaseModel):
     per_page: int
     total_items: int
     total_pages: int
-    next_page: Optional[int] = None
-    prev_page: Optional[int] = None
+    next_page: int | None = None
+    prev_page: int | None = None
 
 
 class MinerData(BaseModel):
+    """TaoStats-compatible miner response body."""
     coldkey: ColdkeyInfo
-    total_balance: str  # RAO string
-    free_balance: str  # RAO string
+    total_balance: str
+    free_balance: str
     total_staked_balance_as_tao: str
     total_staked_mining_balance_as_tao: str
     total_staked_non_mining_balance_as_tao: str
@@ -75,15 +76,11 @@ class MinerResponse(BaseModel):
     data: list[MinerData]
 
 
-# --- Price endpoint ---
-
 class PriceResponse(BaseModel):
     symbol: str = "TAO/USDT"
     price: float
     cached: bool = True
 
-
-# --- Emission endpoint ---
 
 class EmissionResponse(BaseModel):
     netuid: int
@@ -101,19 +98,17 @@ class EmissionResponse(BaseModel):
     tao_price_usd: float
 
 
-# --- Neuron endpoint ---
-
 class NeuronResponse(BaseModel):
     netuid: int
     uid: int
     hotkey: str
     coldkey: str
-    stake: float  # alpha
+    stake: float
     stake_as_tao: float
     incentive: float
     consensus: float
     trust: float
-    emission_per_epoch: float  # alpha
+    emission_per_epoch: float
     emission_per_epoch_as_tao: float
     daily_alpha: float
     daily_tao: float
@@ -126,8 +121,6 @@ class NeuronResponse(BaseModel):
     rank: float
 
 
-# --- Subnet endpoints ---
-
 class SubnetInfoResponse(BaseModel):
     netuid: int
     name: str
@@ -139,7 +132,7 @@ class SubnetInfoResponse(BaseModel):
     emission_value: float
     tao_in: float
     alpha_in: float
-    price: float  # alpha to tao rate
+    price: float
     total_stake: float
 
 
@@ -162,8 +155,6 @@ class SubnetNeuronsResponse(BaseModel):
     per_page: int
     neurons: list[SubnetNeuronSummary]
 
-
-# --- Portfolio endpoint ---
 
 class PortfolioSubnet(BaseModel):
     netuid: int
@@ -189,33 +180,31 @@ class PortfolioResponse(BaseModel):
     subnets: list[PortfolioSubnet]
 
 
-# --- History endpoints ---
-
 class PricePoint(BaseModel):
     block: int
     timestamp: str
-    alpha_price_tao: Optional[float] = None
-    tao_price_usd: Optional[float] = None
+    alpha_price_tao: float | None = None
+    tao_price_usd: float | None = None
 
 
 class SnapshotPoint(BaseModel):
     block: int
     timestamp: str
     netuid: int
-    alpha_price_tao: Optional[float] = None
-    tao_price_usd: Optional[float] = None
-    tao_in: Optional[float] = None
-    alpha_in: Optional[float] = None
-    total_stake: Optional[float] = None
-    emission_rate: Optional[float] = None
-    validator_count: Optional[int] = None
-    neuron_count: Optional[int] = None
+    alpha_price_tao: float | None = None
+    tao_price_usd: float | None = None
+    tao_in: float | None = None
+    alpha_in: float | None = None
+    total_stake: float | None = None
+    emission_rate: float | None = None
+    validator_count: int | None = None
+    neuron_count: int | None = None
 
 
 class HistoryStatsResponse(BaseModel):
     netuid: int
-    earliest_block: Optional[int] = None
-    latest_block: Optional[int] = None
-    earliest_time: Optional[str] = None
-    latest_time: Optional[str] = None
+    earliest_block: int | None = None
+    latest_block: int | None = None
+    earliest_time: str | None = None
+    latest_time: str | None = None
     total_snapshots: int

@@ -230,8 +230,7 @@ OpenTaoAPI/
 │   └── models/
 │       └── schemas.py          # Pydantic response models
 ├── scripts/
-│   ├── backfill.py             # Historical scraper (chain-direct)
-│   └── backfill_taostats.py    # Historical scraper (TaoStats API)
+│   └── backfill.py             # Historical data scraper (archive node)
 ├── data/
 │   └── opentao.db              # SQLite database (created on first run)
 ├── frontend/
