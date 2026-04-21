@@ -342,7 +342,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="OpenTaoAPI",
     description=(
-        "**Self-hosted open-source alternative to TaoStats, CoinMarketCap, and tao.app.** "
+        "**Self-hosted open-source alternative to TaoStats, TaoMarketCap, and tao.app.** "
         "Everything a hosted Bittensor analytics provider gives you, plus the "
         "integration primitives closed-source products can't offer.\n\n"
         "**What's here:**\n"

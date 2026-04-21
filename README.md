@@ -1,6 +1,6 @@
 # OpenTaoAPI
 
-**Self-hosted open-source alternative to TaoStats, CoinMarketCap, and tao.app.** Run it on your own box, own your data, pay nothing.
+**Self-hosted open-source alternative to TaoStats, TaoMarketCap, and tao.app.** Run it on your own box, own your data, pay nothing.
 
 The project gives you everything a hosted Bittensor analytics provider does (subnet prices, OHLC candles, portfolio tracking, miner and validator tables, historical snapshots), plus the three things closed-source products structurally can't: webhooks, a live event stream, and embeddable widgets with no API key.
 
@@ -24,7 +24,7 @@ The project gives you everything a hosted Bittensor analytics provider does (sub
 
 ### Why self-host?
 
-Hosted providers (TaoStats, CoinMarketCap's Bittensor pages, tao.app) have rate limits, require API keys, and can change pricing or shut down features without notice. OpenTaoAPI gives you the same data directly from chain, with integration primitives (webhooks, SSE, embeds) the hosted services don't offer. Point it at the public archive node or your own validator's node.
+Hosted providers (TaoStats, TaoMarketCap, tao.app) have rate limits, require API keys for anything beyond casual browsing, and can change pricing or shut down features without notice. OpenTaoAPI gives you the same data directly from chain, plus integration primitives (webhooks, SSE, embeds) the hosted services don't offer. Point it at the public archive node or your own validator's node.
 
 ## Quick Start
 
@@ -385,21 +385,26 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 
 ## Comparison
 
-| Feature | OpenTaoAPI | TaoStats | CoinMarketCap | tao.app |
+| Feature | OpenTaoAPI | TaoStats | TaoMarketCap | tao.app |
 |---|---|---|---|---|
 | Open source | ✅ MIT | ❌ | ❌ | ❌ |
 | Self-hostable | ✅ | ❌ | ❌ | ❌ |
 | API key required | ❌ | ✅ | ✅ | ✅ |
-| Rate-limited (free tier) | None on API | 5 req/min | yes | yes |
-| Subnet prices / market cap | ✅ | ✅ | ✅ (limited) | ✅ |
-| OHLC candles | ✅ | ❌ | ❌ | ✅ |
+| Rate-limited (free tier) | none on self-host | 5 req/min | yes | yes |
+| Subnet prices and market caps | ✅ | ✅ | ✅ | ✅ |
+| OHLC candles | ✅ | ❌ | ✅ | ✅ |
+| Miner and validator tables | ✅ | ✅ | ✅ | ✅ |
+| Coldkey portfolio view | ✅ | ✅ | ✅ | ✅ |
 | Full metagraph export | ✅ | limited | ❌ | limited |
-| Miner / validator tables | ✅ | ✅ | ❌ | ✅ |
-| Coldkey portfolio view | ✅ | ✅ | ❌ | ✅ |
-| TaoStats-compatible `miner` endpoint | ✅ | n/a | ❌ | ❌ |
+| Stake transfer tracking | ❌ | ✅ | ❌ | ✅ |
+| Holder breakdowns | ❌ | ✅ | ✅ | ✅ |
+| Block and extrinsic data | ❌ | ✅ | ❌ | ✅ |
+| TaoStats-compatible `/miner/` endpoint | ✅ | n/a | ❌ | ❌ |
 | Webhook alerts | ✅ | ❌ | ❌ | ❌ |
 | Live event stream (SSE) | ✅ | ❌ | ❌ | ❌ |
-| Embeddable widgets | ✅ | ❌ | ❌ | ❌ |
+| Embeddable no-auth widgets | ✅ | ❌ | ❌ | ❌ |
+
+TaoMarketCap and tao.app are further along on breadth (stake transfers, holder analytics, block-level data). The point of OpenTaoAPI isn't to win that race; it's to be the **only** option you can run on your own box with webhooks and SSE baked in. If you need deep historical flow analysis right now, use tao.app. If you need a reliable, self-hosted, integration-friendly API that will never lock you out or change terms, self-host this.
 
 ## Hosted demo
 
