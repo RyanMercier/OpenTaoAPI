@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections import defaultdict
 
 from fastapi import APIRouter, HTTPException
@@ -8,6 +9,8 @@ from api.services.calculations import calculate_emission
 from api.services.chain_client import ChainClient
 from api.services.metagraph_compat import meta_get, meta_get_uid
 from api.services.price_client import PriceClient
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["portfolio"])
 
@@ -71,8 +74,20 @@ async def get_portfolio(coldkey: str):
 
     dyn_by_netuid = {}
     for n, r in zip(netuids, dyn_results):
-        if not isinstance(r, Exception):
+        if isinstance(r, Exception):
+            logger.warning("Portfolio: gather dropped SN%d (%s); retrying sequentially", n, r)
+        else:
             dyn_by_netuid[n] = r
+
+    # Retry any subnet the batched gather failed on. A single hung RPC in a
+    # parallel gather can poison an otherwise good payload, and the portfolio
+    # response absolutely cannot silently omit real stake positions.
+    missing = [n for n in netuids if n not in dyn_by_netuid]
+    for n in missing:
+        try:
+            dyn_by_netuid[n] = await _chain_client.get_dynamic_info(n)
+        except Exception as e:
+            logger.error("Portfolio: dynamic_info unavailable for SN%d: %s", n, e)
 
     metas = {}
     for n, r in zip(registered_netuids, meta_results):
@@ -83,11 +98,32 @@ async def get_portfolio(coldkey: str):
     subnets = []
 
     for n in sorted(netuids):
+        subnet_stakes = by_netuid[n]
+        total_alpha = sum(float(s.stake) for s in subnet_stakes)
+        hotkey_count = len(subnet_stakes)
+
         dyn = dyn_by_netuid.get(n)
         if dyn is None:
+            # Emit a degraded row so the UI and totals stay honest. Without
+            # pool data we can't price alpha, but we can still show the
+            # alpha amount and flag it with price_tao=0.
+            logger.warning(
+                "Portfolio: emitting SN%d with unknown price (%.4f alpha unpriced)",
+                n, total_alpha,
+            )
+            subnets.append(PortfolioSubnet(
+                netuid=n,
+                name=f"SN {n}",
+                symbol="",
+                balance_alpha=total_alpha,
+                balance_tao=0.0,
+                price_tao=0.0,
+                value_usd=0.0,
+                hotkey_count=hotkey_count,
+                daily_yield_tao=0.0,
+                daily_yield_usd=0.0,
+            ))
             continue
-
-        subnet_stakes = by_netuid[n]
 
         tao_in = float(dyn.tao_in)
         alpha_in = float(dyn.alpha_in)
@@ -107,10 +143,8 @@ async def get_portfolio(coldkey: str):
             symbol = symbol or "τ"
             price = 1.0
 
-        total_alpha = sum(float(s.stake) for s in subnet_stakes)
         total_tao = total_alpha * price if n != 0 else total_alpha
         total_staked_tao += total_tao
-        hotkey_count = len(subnet_stakes)
 
         # Compute daily yield
         daily_yield_tao = 0.0
