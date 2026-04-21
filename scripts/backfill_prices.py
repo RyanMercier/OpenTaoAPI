@@ -52,7 +52,7 @@ async def run(args: argparse.Namespace) -> None:
         else:
             rng = await db.get_missing_price_range()
             if not rng:
-                print("No rows missing tao_price_usd — nothing to do.")
+                print("No rows missing tao_price_usd. Nothing to do.")
                 return
             start_ms, end_ms = _iso_to_ms(rng[0]), _iso_to_ms(rng[1]) + 3600_000
             print(f"Filling missing prices from {rng[0]} to {rng[1]}")

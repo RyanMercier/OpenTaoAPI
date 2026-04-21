@@ -351,8 +351,8 @@ function render(data) {
               <td>τ${fmt(r.balance)}</td>
               <td class="val-dim">τ${fmt(r.price, 3)}</td>
               <td>${fmtUsd(r.value)}</td>
-              <td class="${r.yield_tao > 0 ? 'val-green' : 'val-dim'}">${r.yield_tao > 0 ? 'τ' + fmt(r.yield_tao) : '—'}</td>
-              <td class="val-dim">${r.isFree ? '—' : r.hotkeys}</td>
+              <td class="${r.yield_tao > 0 ? 'val-green' : 'val-dim'}">${r.yield_tao > 0 ? 'τ' + fmt(r.yield_tao) : '-'}</td>
+              <td class="val-dim">${r.isFree ? '-' : r.hotkeys}</td>
             </tr>
           `).join('')}
         </tbody>

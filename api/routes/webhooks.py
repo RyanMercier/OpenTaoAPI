@@ -31,7 +31,7 @@ def _require_db() -> Database:
 
 def _validate_webhook_url(url: str) -> None:
     """Reject URLs that resolve to private, loopback, or metadata-service
-    addresses. This is defense-in-depth against SSRF — the endpoint is
+    addresses. This is defense-in-depth against SSRF; the endpoint is
     already documented as self-host-only, but a single misconfigured proxy
     shouldn't turn it into a credentials-harvesting tool."""
     if len(url) > MAX_URL_LEN:

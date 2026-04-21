@@ -199,7 +199,7 @@ async def run_backfill(args):
         grand_total = 0
         for netuid, result in zip(netuids, results):
             if isinstance(result, Exception):
-                print(f"\n  SN{netuid}: failed — {result}")
+                print(f"\n  SN{netuid}: failed: {result}")
             else:
                 grand_total += result
 

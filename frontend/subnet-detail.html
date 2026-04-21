@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Subnet — OpenTaoAPI</title>
+<title>Subnet · OpenTaoAPI</title>
 <link rel="stylesheet" href="/static/common.css">
 <style>
 .nav-links { margin-left: auto; }
@@ -83,7 +83,7 @@
 
 /* Tabs already in common.css */
 
-/* Chart panel — interval selector is a single segmented control so the
+/* Chart panel: interval selector is a single segmented control so the
    buttons feel like one object rather than five loose chips. */
 .interval-bar {
   display: inline-flex;
@@ -176,7 +176,7 @@
   text-align: center;
 }
 
-/* Miners/validators tables — ported from miners.html */
+/* Miners/validators tables, ported from miners.html */
 .miners-wrap { padding: 0 0 64px; overflow-x: auto; }
 
 .miners-table {
@@ -279,7 +279,7 @@
         <span class="sn-num" id="subnetNum"></span>
       </div>
       <div class="price-row">
-        <span class="price-big" id="livePrice">—</span>
+        <span class="price-big" id="livePrice">-</span>
         <span class="price-pct" id="pricePct" style="display:none"></span>
       </div>
       <div class="subnet-meta" id="subnetMeta"></div>
@@ -443,7 +443,7 @@ function fmtAlpha(n, sym) {
   return sym + n.toFixed(4);
 }
 function fmtStake(n) {
-  if (n === 0) return '—';
+  if (n === 0) return '-';
   if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
   if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
   return fmt(n);
@@ -468,7 +468,7 @@ async function loadHeader() {
     const name = subnetInfo.name || `Subnet ${netuid}`;
     document.getElementById('subnetName').textContent = name;
     document.getElementById('subnetNum').textContent = `SN ${netuid} · ${subnetInfo.symbol || ''}`;
-    document.title = `${name} — OpenTaoAPI`;
+    document.title = `${name} · OpenTaoAPI`;
     document.getElementById('livePrice').textContent =
       netuid === 0 ? 'τ1' : fmtTao(subnetInfo.price);
     document.getElementById('subnetMeta').innerHTML = `
@@ -561,7 +561,7 @@ function ensureChart() {
     borderVisible: false,
     wickUpColor: '#00d4aa',
     wickDownColor: '#e84855',
-    // Alpha prices live in the 0.00xx–0.1xx range, so the default 2-decimal
+    // Alpha prices live in the 0.00xx to 0.1xx range, so the default 2-decimal
     // formatter collapses every candle to the same value on hover.
     priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
   });
@@ -577,7 +577,7 @@ function toChartTime(tSeconds) {
 }
 
 // Silently kick off a 30-day chain-backfill if the current view is sparse.
-// One-shot per netuid per page load — the backend coalesces duplicate
+// One-shot per netuid per page load; the backend coalesces duplicate
 // requests anyway, but no point hammering it.
 let backfillTriggered = false;
 const SPARSE_THRESHOLD = 24;
@@ -603,7 +603,7 @@ async function maybeTriggerBackfill(candleCount) {
     if (job.state === 'done') { loadCandles(); return; }
     setBackfillPill('Loading history…');
     pollBackfill();
-  } catch { /* ignore — chart already shows whatever we have */ }
+  } catch { /* ignore; chart already shows whatever we have */ }
 }
 
 async function pollBackfill() {
@@ -752,7 +752,7 @@ function renderMiners(data) {
               <td class="uid-cell">${m.uid}</td>
               ${keyCell(m.hotkey, false)}
               ${keyCell(m.coldkey, true)}
-              <td class="ip-cell">${esc(m.axon) || '—'}</td>
+              <td class="ip-cell">${esc(m.axon) || '-'}</td>
               <td class="${m.incentive > 0 ? 'incentive-cell' : 'incentive-zero'}">${fmtPct(m.incentive)}</td>
               <td class="${m.stake > 0 ? 'stake-cell' : 'stake-zero'}">${fmtStake(m.stake)}</td>
               <td class="${m.daily_alpha > 0 ? 'emission-cell' : 'emission-zero'}">${fmtAlpha(m.daily_alpha, sym)}</td>

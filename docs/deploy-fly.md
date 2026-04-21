@@ -40,7 +40,7 @@ fly secrets set HISTORY_POLL_INTERVAL=1800
 # fly secrets set SUBTENSOR_ENDPOINT=wss://your-validator:9944
 ```
 
-`ARCHIVE_ENDPOINT` defaults to the public `wss://archive.chain.opentensor.ai:443/` — only override if you're running an archive node of your own.
+`ARCHIVE_ENDPOINT` defaults to the public `wss://archive.chain.opentensor.ai:443/`. Only override if you're running an archive node of your own.
 
 ## Deploy
 
@@ -85,6 +85,6 @@ That's it. The volume persists across deploys, so the historical database surviv
 
 ## Troubleshooting
 
-- **`stale=true` on /health**: the poller is hung or crash-looping. Check `fly logs` — the supervisor prints `Poller crashed (restart #N)` with a full traceback.
+- **`stale=true` on /health**: the poller is hung or crash-looping. Check `fly logs`; the supervisor prints `Poller crashed (restart #N)` with a full traceback.
 - **Cold start is slow**: first metagraph fetch takes ~15-20s; Fly's health checks should allow at least 60s.
 - **DB got corrupted**: stop the app, `fly ssh console -C "rm /app/data/opentao.db"`, restart, and re-run backfill.

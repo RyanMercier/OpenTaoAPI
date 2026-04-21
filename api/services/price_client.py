@@ -28,7 +28,7 @@ class PriceClient:
 
     async def _fetch_price(self) -> float:
         if not self._client:
-            raise RuntimeError("PriceClient not started — call startup() first")
+            raise RuntimeError("PriceClient not started. Call startup() first.")
         resp = await self._client.get(
             MEXC_TICKER_URL, params={"symbol": "TAOUSDT"}
         )
@@ -49,7 +49,7 @@ class PriceClient:
         ``open_ms``, ``close_ms``, ``open``, ``high``, ``low``, ``close``,
         ``volume``. Closed klines are immutable so callers can cache freely."""
         if not self._client:
-            raise RuntimeError("PriceClient not started — call startup() first")
+            raise RuntimeError("PriceClient not started. Call startup() first.")
 
         out: list[dict] = []
         cursor = start_ms

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Subnets — OpenTaoAPI</title>
+<title>Subnets · OpenTaoAPI</title>
 <link rel="stylesheet" href="/static/common.css">
 <style>
 :root { --green: #00d4aa; }
@@ -363,7 +363,7 @@ function renderTable(data) {
               <td class="price-cell">${s.netuid === 0 ? 'τ1' : fmtTao(s.price)}</td>
               <td class="sparkline-cell"><img src="/embed/subnet/${s.netuid}/sparkline?hours=24&w=120&h=28" alt="" loading="lazy"></td>
               <td class="mcap-cell">${fmtTao(s.market_cap_tao)}</td>
-              <td class="volume-cell">${s.volume_tao > 0 ? fmtTao(s.volume_tao) : '—'}</td>
+              <td class="volume-cell">${s.volume_tao > 0 ? fmtTao(s.volume_tao) : '-'}</td>
               <td class="supply-cell">${fmtSupply(s.supply)}</td>
             </tr>
           `).join('')}
@@ -479,7 +479,7 @@ function connectSSE() {
 
 connectSSE();
 
-// Staleness guard — reconnect + refetch if silent for 90 s.
+// Staleness guard: reconnect + refetch if silent for 90 s.
 setInterval(() => {
   if (Date.now() - lastEventAt > 90_000) {
     connectSSE();

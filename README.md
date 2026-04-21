@@ -2,7 +2,7 @@
 
 **Self-hosted open-source alternative to TaoStats, CoinMarketCap, and tao.app.** Run it on your own box, own your data, pay nothing.
 
-The project gives you everything a hosted Bittensor analytics provider does — subnet prices, OHLC candles, portfolio tracking, miner and validator tables, historical snapshots — plus the three things closed-source products structurally can't: webhooks, a live event stream, and embeddable widgets with no API key.
+The project gives you everything a hosted Bittensor analytics provider does (subnet prices, OHLC candles, portfolio tracking, miner and validator tables, historical snapshots), plus the three things closed-source products structurally can't: webhooks, a live event stream, and embeddable widgets with no API key.
 
 **Web UI** at `http://localhost:8000` · **Swagger docs** at `http://localhost:8000/docs`
 
@@ -17,9 +17,9 @@ The project gives you everything a hosted Bittensor analytics provider does — 
 - Web dashboard: portfolio viewer, subnets overview, miners/validators tables
 - Direct chain queries via Bittensor SDK (no third-party APIs except MEXC for price)
 - Historical data: SQLite storage with epoch-resolution snapshots via public archive node, live polling
-- Backfill scripts pull directly from chain and MEXC — no third-party API keys needed
+- Backfill scripts pull directly from chain and MEXC, no third-party API keys needed
 - In-memory caching with configurable TTLs, per-RPC timeouts, supervised background workers
-- `/health` returns HTTP 503 when the poller is stale — wire it directly to `docker healthcheck`, Fly, Kubernetes, etc.
+- `/health` returns HTTP 503 when the poller is stale. Wire it directly to `docker healthcheck`, Fly, Kubernetes, etc.
 - Self-hostable with Docker or conda
 
 ### Why self-host?
@@ -96,7 +96,7 @@ Response format matches the TaoStats `/api/miner/` endpoint. Includes coldkey ba
 > them as zero/false. They'd require scanning every historical block for a
 > hotkey and weren't needed by the projects that drove the initial build. If
 > you need real values, they're straightforward to compute from the
-> metagraph's `registration_block` vector plus `ImmunityPeriod` — PRs welcome.
+> metagraph's `registration_block` vector plus `ImmunityPeriod`. PRs welcome.
 
 ### Subnets
 
@@ -133,7 +133,7 @@ GET /api/v1/history/{netuid}/snapshots?hours=168   # Full snapshots (last 7 days
 GET /api/v1/history/{netuid}/stats                 # Data coverage stats
 ```
 
-Historical data is stored in SQLite. The backfill script queries the public archive node (`wss://archive.chain.opentensor.ai`) at epoch-level resolution (~30 min intervals). The live poller adds new snapshots on a cadence controlled by `HISTORY_POLL_INTERVAL` — default 30 minutes, `-1` for every block (~12s), `0` to disable.
+Historical data is stored in SQLite. The backfill script queries the public archive node (`wss://archive.chain.opentensor.ai`) at epoch-level resolution (~30 min intervals). The live poller adds new snapshots on a cadence controlled by `HISTORY_POLL_INTERVAL`: default 30 minutes, `-1` for every block (~12s), `0` to disable.
 
 ```bash
 # Backfill last 30 days for one subnet (MEXC price fill runs automatically at the end)
@@ -148,7 +148,7 @@ python -m scripts.backfill --netuid 51 --start-block 5000000 --skip-prices
 # Resume where each subnet last stopped
 python -m scripts.backfill --all-subnets --resume
 
-# Also scrape metagraph totals (stake, emissions, neuron count — slower)
+# Also scrape metagraph totals (stake, emissions, neuron count, slower)
 python -m scripts.backfill --netuid 51 --days 7 --full
 
 # Re-fill tao_price_usd standalone (also runs automatically after backfill)
@@ -269,7 +269,7 @@ r = httpx.get(f"{BASE}/emissions/51/40")
 em = r.json()
 print(f"Daily: {em['daily_tao']:.4f} TAO (${em['daily_usd']:.2f})")
 
-# OHLC candles — drop straight into a charting library
+# OHLC candles, drop straight into a charting library
 r = httpx.get(f"{BASE}/subnet/51/candles", params={"interval": "1h", "hours": 48})
 for bar in r.json()[-5:]:
     print(f"{bar['t']}  O={bar['o']:.6f}  H={bar['h']:.6f}  "
@@ -396,7 +396,7 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 | Full metagraph export | ✅ | limited | ❌ | limited |
 | Miner / validator tables | ✅ | ✅ | ❌ | ✅ |
 | Coldkey portfolio view | ✅ | ✅ | ❌ | ✅ |
-| TaoStats-compatible `miner` endpoint | ✅ | — | ❌ | ❌ |
+| TaoStats-compatible `miner` endpoint | ✅ | n/a | ❌ | ❌ |
 | Webhook alerts | ✅ | ❌ | ❌ | ❌ |
 | Live event stream (SSE) | ✅ | ❌ | ❌ | ❌ |
 | Embeddable widgets | ✅ | ❌ | ❌ | ❌ |
@@ -415,7 +415,7 @@ TAO: 5EhrSbeGeiLgsXcJTXXaBCcqrrMubvWcykSwk4Ho6KUd5sQG
 
 ## Contact
 
-Built by Ryan Mercier ([github.com/ryanmercier](https://github.com/ryanmercier)). Open to roles in Bittensor infrastructure, analytics, or trading tooling — issues and PRs welcome, or reach out directly.
+Built by Ryan Mercier ([github.com/ryanmercier](https://github.com/ryanmercier)). Open to roles in Bittensor infrastructure, analytics, or trading tooling. Issues and PRs welcome, or reach out directly.
 
 ## License
 

@@ -58,7 +58,7 @@ class Database:
         self._db: Optional[aiosqlite.Connection] = None
         # Serialize writes so the poller + webhook evaluator don't interleave
         # transactions on the shared aiosqlite connection. Reads are
-        # unguarded — SQLite handles concurrent readers fine.
+        # unguarded; SQLite handles concurrent readers fine.
         self._write_lock = asyncio.Lock()
 
     async def startup(self):
@@ -101,7 +101,7 @@ class Database:
                 await self._db.commit()
                 return cursor.rowcount > 0
             except aiosqlite.IntegrityError:
-                # Duplicate (block, netuid) — a poller race or resume-replay.
+                # Duplicate (block, netuid): a poller race or resume-replay.
                 return False
             except Exception:
                 logger.exception("Failed to insert snapshot")
@@ -328,7 +328,7 @@ class Database:
             await self._db.commit()
 
     async def update_webhook_value(self, sub_id: int, value: float) -> None:
-        """Record observed value without marking a fire — used when we
+        """Record observed value without marking a fire, used when we
         evaluate but don't cross the threshold."""
         async with self._write_lock:
             await self._db.execute(

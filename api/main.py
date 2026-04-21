@@ -81,7 +81,7 @@ async def _snapshot_all_subnets():
         tao_in = float(sn.tao_in)
         alpha_in = float(sn.alpha_in)
         # Root subnet is 1:1 by convention. For every other subnet, an
-        # empty alpha pool means the subnet is mid-init or broken — skip
+        # empty alpha pool means the subnet is mid-init or broken; skip
         # the row rather than writing a zero that would poison OHLC bars.
         if sn.netuid == 0:
             price = 1.0
@@ -122,9 +122,9 @@ async def _live_poller():
     """Background poller with timeout-per-cycle and cache recovery.
 
     HISTORY_POLL_INTERVAL values:
-      > 0  — poll every N seconds
-      = 0  — disabled
-      = -1 — poll every block (12s cadence)
+      > 0  : poll every N seconds
+      = 0  : disabled
+      = -1 : poll every block (12s cadence)
     """
     interval = settings.history_poll_interval
 
@@ -212,7 +212,7 @@ async def _post_webhook(client: httpx.AsyncClient, url: str, payload: dict) -> b
             if resp.status_code < 400:
                 return True
             logger.warning("Webhook %s returned %s", url, resp.status_code)
-        except Exception as exc:  # noqa: BLE001 — network errors are expected
+        except Exception as exc:  # noqa: BLE001, network errors are expected
             logger.warning("Webhook %s failed (attempt %d): %s", url, attempt + 1, exc)
         await asyncio.sleep(1 + attempt)
     return False
@@ -282,7 +282,7 @@ async def _poller_supervisor():
     while True:
         try:
             await _live_poller()
-            # Normal return means polling was disabled — exit cleanly.
+            # Normal return means polling was disabled. Exit cleanly.
             logger.info("Poller exited cleanly; supervisor stopping")
             return
         except asyncio.CancelledError:
@@ -320,7 +320,7 @@ async def lifespan(app: FastAPI):
         _poll_state["last_success"] = time.time()
         _poll_state["total_successes"] = 1
     except Exception:
-        logger.exception("Initial snapshot failed — poller will retry")
+        logger.exception("Initial snapshot failed; poller will retry")
 
     poller_task = asyncio.create_task(_poller_supervisor())
     evaluator_task = asyncio.create_task(_webhook_evaluator_supervisor())
@@ -343,7 +343,7 @@ app = FastAPI(
     title="OpenTaoAPI",
     description=(
         "**Self-hosted open-source alternative to TaoStats, CoinMarketCap, and tao.app.** "
-        "Everything a hosted Bittensor analytics provider gives you — plus the "
+        "Everything a hosted Bittensor analytics provider gives you, plus the "
         "integration primitives closed-source products can't offer.\n\n"
         "**What's here:**\n"
         "- Subnet prices, market caps, pool reserves (`tao_in` / `alpha_in`)\n"
@@ -453,7 +453,7 @@ async def subnet_detail_page(netuid: int):
 
 @app.get("/subnet/{netuid}/miners", include_in_schema=False)
 async def miners_legacy(netuid: int):
-    # Old URL — send to the new detail page with the miners tab active.
+    # Old URL. Send to the new detail page with the miners tab active.
     return RedirectResponse(
         url=f"/subnet/{netuid}?tab=miners",
         status_code=307,

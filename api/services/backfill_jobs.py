@@ -1,7 +1,7 @@
 """In-process backfill job queue.
 
 The subnet detail page triggers these when its chart is sparse. One active
-job per subnet — a second request while the first is running returns the
+job per subnet, so a second request while the first is running returns the
 existing job instead of starting a second archive-node connection.
 
 Jobs are ephemeral. They live in-memory and are garbage-collected on
@@ -55,7 +55,7 @@ class BackfillJobs:
         """Return (job, started_new). If a job for this subnet is already
         running, reuses it."""
         lock = self._lock_for(netuid)
-        # `locked()` is enough — we only want to reject while another job
+        # `locked()` is enough; we only want to reject while another job
         # is mid-run, and acquiring the lock is handled inside the task.
         existing = self._jobs.get(netuid)
         if existing and existing.state == "running":
@@ -71,7 +71,7 @@ class BackfillJobs:
         from scripts.backfill import backfill_subnet
 
         async with lock:
-            # Revalidate state under the lock — another task may have
+            # Revalidate state under the lock; another task may have
             # already satisfied this request between start() and _run().
             if job.state != "running":
                 return

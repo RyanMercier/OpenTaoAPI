@@ -43,11 +43,11 @@ infrastructure they trust. The defaults assume:
   need signed payloads, add HMAC verification between here and your receiver;
   pull requests welcome.
 - **Secrets in webhook URLs.** The `/webhooks` UI lists subscription URLs in
-  plaintext — anyone with access to that page can see Discord webhook tokens.
+  plaintext. Anyone with access to that page can see Discord webhook tokens.
 
 ## Known sharp edges
 
-- The first page load on a fresh install blocks for 10–30 s while the
+- The first page load on a fresh install blocks for 10 to 30 seconds while the
   metagraph syncs. `/health` returns `503` with `stale=true` during this
   window so operator monitoring works correctly.
 - `bittensor` is pinned `>=9.1.0,<10.0.0`. Major upgrades may introduce
