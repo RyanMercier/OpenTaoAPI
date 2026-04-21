@@ -61,8 +61,10 @@ async def scrape_block(subtensor, netuid: int, block: int, full: bool = False):
                 total_stake = float(sum(meta.S)) if hasattr(meta, 'S') else 0.0
                 emission_rate = float(sum(meta.E)) if hasattr(meta, 'E') else 0.0
                 neuron_count = int(meta.n)
-            except Exception:
-                pass
+            except Exception as e:
+                # Best-effort: the pool data is already captured, just drop
+                # the metagraph-derived fields for this block and move on.
+                print(f"  block {block} metagraph skipped: {e}")
 
         return {
             "block": block,
@@ -170,36 +172,58 @@ async def run_backfill(args):
             netuids = [args.netuid]
 
         step = args.step
-        grand_total = 0
+        sem = asyncio.Semaphore(args.concurrency)
 
-        for netuid in netuids:
-            # Determine start block
-            if args.resume:
-                latest = await db.get_latest_block(netuid)
-                if latest:
-                    start = latest + step
+        async def _one(netuid: int) -> int:
+            async with sem:
+                if args.resume:
+                    latest = await db.get_latest_block(netuid)
+                    start = (latest + step) if latest else (args.start_block or 3000000)
+                elif args.days:
+                    start = current_block - (BLOCKS_PER_DAY * args.days)
                 else:
-                    start = args.start_block or 3000000
-            elif args.days:
-                start = current_block - (BLOCKS_PER_DAY * args.days)
+                    start = args.start_block
+
+                end = args.end_block or current_block
+                if start >= end:
+                    print(f"\n  SN{netuid}: already up to date")
+                    return 0
+
+                return await backfill_subnet(
+                    subtensor, db, netuid, start, end, step, args.full, args.delay
+                )
+
+        results = await asyncio.gather(
+            *[_one(n) for n in netuids], return_exceptions=True
+        )
+        grand_total = 0
+        for netuid, result in zip(netuids, results):
+            if isinstance(result, Exception):
+                print(f"\n  SN{netuid}: failed — {result}")
             else:
-                start = args.start_block
-
-            end = args.end_block or current_block
-
-            if start >= end:
-                print(f"\n  SN{netuid}: already up to date")
-                continue
-
-            inserted = await backfill_subnet(
-                subtensor, db, netuid, start, end, step, args.full, args.delay
-            )
-            grand_total += inserted
+                grand_total += result
 
         total_in_db = await db.get_snapshot_count()
         print(f"\nComplete. +{grand_total} new snapshots. Database total: {total_in_db}")
 
     await db.shutdown()
+
+    if not args.skip_prices:
+        # Chain scraper writes tao_price_usd=0 because MEXC has no per-block
+        # quote. Automatically run the price backfill so a fresh operator
+        # doesn't end up with silently-zero USD prices everywhere.
+        from scripts.backfill_prices import run as backfill_prices_run
+
+        class _PricesArgs:
+            start = None
+            end = None
+            db_path = args.db_path
+
+        print("\nFilling tao_price_usd from MEXC klines...")
+        try:
+            await backfill_prices_run(_PricesArgs())
+        except Exception as e:
+            print(f"  price backfill failed: {e}")
 
 
 def main():
@@ -215,9 +239,11 @@ def main():
     parser.add_argument("--step", type=int, default=360, help="Blocks between samples (default: 360 = 1 epoch)")
     parser.add_argument("--days", type=int, default=None, help="Backfill last N days instead of start-block")
     parser.add_argument("--resume", action="store_true", help="Resume each subnet from its last scraped block")
-    parser.add_argument("--delay", type=float, default=1.0, help="Seconds between RPC calls (default: 1.0)")
+    parser.add_argument("--delay", type=float, default=1.0, help="Seconds between RPC calls within a subnet (default: 1.0)")
+    parser.add_argument("--concurrency", type=int, default=8, help="Number of subnets to backfill in parallel (default: 8)")
     parser.add_argument("--endpoint", type=str, default=None, help="Archive endpoint override")
     parser.add_argument("--full", action="store_true", help="Also fetch metagraph (slower)")
+    parser.add_argument("--skip-prices", action="store_true", help="Don't auto-run scripts.backfill_prices after the chain scrape")
     parser.add_argument("--db-path", type=str, default=settings.database_path, help="Database path")
 
     args = parser.parse_args()

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from fastapi import APIRouter, HTTPException
 
@@ -7,6 +8,8 @@ from api.services.calculations import alpha_to_tao, calculate_emission
 from api.services.chain_client import ChainClient
 from api.services.metagraph_compat import meta_get, meta_get_uid
 from api.services.price_client import PriceClient
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["neuron"])
 
@@ -93,8 +96,8 @@ async def get_neuron_by_hotkey(hotkey: str):
             for uid in range(meta.n):
                 if meta.hotkeys[uid] == hotkey:
                     return _build_neuron_response(meta, dyn, uid, tao_price)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Subnet %d skipped during hotkey lookup: %s", netuid, e)
         return None
 
     checks = await asyncio.gather(*[_check_subnet(n) for n in netuids])
@@ -127,7 +130,8 @@ async def get_neurons_by_coldkey(coldkey: str):
                 _chain_client.get_metagraph(netuid),
                 _chain_client.get_dynamic_info(netuid),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning("Skipping subnet %d for coldkey lookup: %s", netuid, e)
             continue
 
         hotkey_to_uid = {meta.hotkeys[uid]: uid for uid in range(meta.n)}

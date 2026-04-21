@@ -60,12 +60,11 @@ async def get_portfolio(coldkey: str):
         )
     ]
 
-    try:
-        dyn_tasks = [_chain_client.get_dynamic_info(n) for n in netuids]
-        meta_tasks = [_chain_client.get_metagraph(n) for n in registered_netuids]
-        all_results = await asyncio.gather(*dyn_tasks, *meta_tasks, return_exceptions=True)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch subnet info: {e}")
+    # return_exceptions=True means gather never raises; we unpack per-result
+    # below and skip failing subnets rather than 502'ing the whole response.
+    dyn_tasks = [_chain_client.get_dynamic_info(n) for n in netuids]
+    meta_tasks = [_chain_client.get_metagraph(n) for n in registered_netuids]
+    all_results = await asyncio.gather(*dyn_tasks, *meta_tasks, return_exceptions=True)
 
     dyn_results = all_results[:len(netuids)]
     meta_results = all_results[len(netuids):]

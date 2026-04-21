@@ -9,8 +9,8 @@
 
 .search-form {
   display: flex;
-  flex: 1;
   max-width: 480px;
+  margin: 24px 0 16px;
 }
 
 .search-form input {
@@ -195,15 +195,21 @@
 
 <header>
   <div class="container inner">
-    <div class="logo">Open<span>Tao</span>API</div>
-    <form class="search-form" id="searchForm">
-      <input type="text" id="coldkeyInput" placeholder="Enter coldkey SS58 address" spellcheck="false" autocomplete="off">
-      <button type="submit">Lookup</button>
-    </form>
+    <a href="/" class="logo">Open<span>Tao</span>API</a>
+    <div class="nav-links">
+      <a href="/">Subnets</a>
+      <a href="/portfolio" class="active">Portfolio</a>
+      <a href="/webhooks">Webhooks</a>
+      <a href="/docs">API Docs</a>
+    </div>
   </div>
 </header>
 
 <main class="container">
+  <form class="search-form" id="searchForm">
+    <input type="text" id="coldkeyInput" placeholder="Enter coldkey SS58 address" spellcheck="false" autocomplete="off">
+    <button type="submit">Lookup</button>
+  </form>
   <div id="content">
     <div class="empty-state">
       <p>Enter a Bittensor coldkey to view portfolio</p>
@@ -215,7 +221,8 @@
 <footer>
   <div class="container">
     <p>
-      <a href="/subnets">Subnets</a> &middot;
+      <a href="/">Subnets</a> &middot;
+      <a href="/webhooks">Webhooks</a> &middot;
       <a href="/docs">API Docs</a> &middot;
       <a href="https://github.com/ryanmercier/OpenTaoAPI">Source</a> &middot;
       Powered by <a href="https://bittensor.com">Bittensor</a> + MEXC
@@ -381,7 +388,11 @@ async function lookup(coldkey) {
     }
     const data = await res.json();
     render(data);
-    location.hash = coldkey;
+    // Shareable URL: /portfolio/{coldkey}. pushState so back-button works.
+    const target = '/portfolio/' + encodeURIComponent(coldkey);
+    if (location.pathname !== target) {
+      history.pushState({}, '', target);
+    }
   } catch (e) {
     content.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
   }
@@ -402,12 +413,26 @@ document.addEventListener('click', e => {
   }
 });
 
-// Load from URL hash
-if (location.hash.length > 1) {
-  const ck = location.hash.slice(1);
-  $('#coldkeyInput').value = ck;
-  lookup(ck);
-}
+// Resolve coldkey from URL: prefer /portfolio/{ck} or /coldkey/{ck}, fall back
+// to the legacy /#{ck} hash.
+(function bootstrap() {
+  let ck = null;
+  const p = location.pathname;
+  const prefixes = ['/portfolio/', '/coldkey/'];
+  for (const prefix of prefixes) {
+    if (p.startsWith(prefix)) {
+      ck = decodeURIComponent(p.slice(prefix.length));
+      break;
+    }
+  }
+  if (!ck && location.hash.length > 1) {
+    ck = location.hash.slice(1);
+  }
+  if (ck) {
+    $('#coldkeyInput').value = ck;
+    lookup(ck);
+  }
+})();
 </script>
 
 </body>

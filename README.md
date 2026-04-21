@@ -1,25 +1,30 @@
 # OpenTaoAPI
 
-Open-source, self-hostable Bittensor network explorer and API. A drop-in alternative to TaoStats and TaoMarketCap.
+**Self-hosted open-source alternative to TaoStats, CoinMarketCap, and tao.app.** Run it on your own box, own your data, pay nothing.
 
-**No API-level rate limits** unlike TaoStats (5 req/min free tier), your self-hosted instance has no request caps. The underlying subtensor RPC nodes (e.g. public Finney endpoints) do have their own connection limits. For heavy usage or production deployments, point OpenTaoAPI at your own subtensor node:
+The project gives you everything a hosted Bittensor analytics provider does — subnet prices, OHLC candles, portfolio tracking, miner and validator tables, historical snapshots — plus the three things closed-source products structurally can't: webhooks, a live event stream, and embeddable widgets with no API key.
 
-```bash
-SUBTENSOR_ENDPOINT=ws://your-node:9944
-```
-
-**Web UI** at `http://localhost:8000` | **Swagger docs** at `http://localhost:8000/docs`
+**Web UI** at `http://localhost:8000` · **Swagger docs** at `http://localhost:8000/docs`
 
 ## Features
 
 - REST API with full subnet, neuron, emission, and portfolio data
 - TaoStats-compatible `/miner/` endpoint for drop-in replacement
+- OHLC candles for every subnet (`5m`/`15m`/`1h`/`4h`/`1d`)
+- Webhook subscriptions for threshold crossings
+- Server-Sent Events stream of live snapshot inserts
+- Embeddable SVG sparkline widgets (no auth required)
 - Web dashboard: portfolio viewer, subnets overview, miners/validators tables
 - Direct chain queries via Bittensor SDK (no third-party APIs except MEXC for price)
 - Historical data: SQLite storage with epoch-resolution snapshots via public archive node, live polling
-- Backfill script pulls directly from chain — no third-party API needed
-- In-memory caching with configurable TTLs
+- Backfill scripts pull directly from chain and MEXC — no third-party API keys needed
+- In-memory caching with configurable TTLs, per-RPC timeouts, supervised background workers
+- `/health` returns HTTP 503 when the poller is stale — wire it directly to `docker healthcheck`, Fly, Kubernetes, etc.
 - Self-hostable with Docker or conda
+
+### Why self-host?
+
+Hosted providers (TaoStats, CoinMarketCap's Bittensor pages, tao.app) have rate limits, require API keys, and can change pricing or shut down features without notice. OpenTaoAPI gives you the same data directly from chain, with integration primitives (webhooks, SSE, embeds) the hosted services don't offer. Point it at the public archive node or your own validator's node.
 
 ## Quick Start
 
@@ -44,10 +49,19 @@ docker-compose up -d
 
 | Page | URL | Description |
 |------|-----|-------------|
-| Subnets | `/subnets` | All subnets ranked by market cap with emission %, price, volume |
-| Miners | `/subnet/{netuid}/miners` | Miner table with incentive, stake, daily emission (alpha + USD) |
-| Validators | `/subnet/{netuid}/miners` then Validators tab | Validator table with stake, VTrust, dividends, dominance, daily emission |
-| Portfolio | `/` | Coldkey lookup showing total balance, per-subnet breakdown, daily yield |
+| Subnets dashboard | `/` | All subnets ranked by market cap with sparklines, live SSE-ticking prices |
+| Subnet detail | `/subnet/{netuid}` | Interactive candlestick chart, miners/validators tabs, embed snippet, alert subscribe |
+| Webhooks | `/webhooks` | Create, list, and delete webhook subscriptions |
+| Portfolio | `/portfolio/{coldkey}` | Coldkey balance across all subnets (daily yield, hotkey count) |
+
+Old URL `/subnet/{netuid}/miners` redirects to `/subnet/{netuid}?tab=miners`.
+
+The subnet detail page uses [lightweight-charts](https://github.com/tradingview/lightweight-charts) (Apache-2.0), vendored locally at `frontend/vendor/` so self-hosted installs work offline. Refresh the vendored copy with:
+
+```bash
+curl -L -o frontend/vendor/lightweight-charts.standalone.production.js \
+  https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js
+```
 
 ## API Endpoints
 
@@ -73,7 +87,16 @@ Cross-subnet portfolio for a coldkey. Returns total balance (TAO + USD), free ba
 GET /api/v1/miner/{coldkey}/{netuid}
 ```
 
-Response format matches the TaoStats `/api/miner/` endpoint. Includes coldkey balance, alpha balances across all subnets, hotkey details with emission data, registration status, and mining rank.
+Response format matches the TaoStats `/api/miner/` endpoint. Includes coldkey balance, alpha balances across all subnets, hotkey details with emission data, and mining rank.
+
+> **Note on zeroed fields.** For drop-in compatibility the response includes
+> `immune`, `in_danger`, `deregistered`, `registration_block`,
+> `total_immune_hotkeys`, `total_hotkeys_in_danger`,
+> `total_deregistered_hotkeys`, and related counters, but OpenTaoAPI returns
+> them as zero/false. They'd require scanning every historical block for a
+> hotkey and weren't needed by the projects that drove the initial build. If
+> you need real values, they're straightforward to compute from the
+> metagraph's `registration_block` vector plus `ImmunityPeriod` — PRs welcome.
 
 ### Subnets
 
@@ -110,21 +133,82 @@ GET /api/v1/history/{netuid}/snapshots?hours=168   # Full snapshots (last 7 days
 GET /api/v1/history/{netuid}/stats                 # Data coverage stats
 ```
 
-Historical data is stored in SQLite. The backfill script queries the public archive node (`wss://archive.chain.opentensor.ai`) at epoch-level resolution (~30 min intervals). The live poller adds new snapshots every 30 minutes going forward.
+Historical data is stored in SQLite. The backfill script queries the public archive node (`wss://archive.chain.opentensor.ai`) at epoch-level resolution (~30 min intervals). The live poller adds new snapshots on a cadence controlled by `HISTORY_POLL_INTERVAL` — default 30 minutes, `-1` for every block (~12s), `0` to disable.
 
 ```bash
-# Backfill last 30 days at epoch resolution (~600 snapshots per subnet)
+# Backfill last 30 days for one subnet (MEXC price fill runs automatically at the end)
 python -m scripts.backfill --netuid 51 --days 30
 
-# Backfill from a specific block
-python -m scripts.backfill --netuid 51 --start-block 5000000
+# All subnets, last 7 days, 8 in parallel
+python -m scripts.backfill --all-subnets --days 7 --concurrency 8
 
-# Resume from where you left off
-python -m scripts.backfill --netuid 51 --resume
+# From a specific block, keep TAO/USD zero (e.g. you'll fill later)
+python -m scripts.backfill --netuid 51 --start-block 5000000 --skip-prices
 
-# Include metagraph data (stake, emissions, neuron count — slower)
+# Resume where each subnet last stopped
+python -m scripts.backfill --all-subnets --resume
+
+# Also scrape metagraph totals (stake, emissions, neuron count — slower)
 python -m scripts.backfill --netuid 51 --days 7 --full
+
+# Re-fill tao_price_usd standalone (also runs automatically after backfill)
+python -m scripts.backfill_prices
 ```
+
+### OHLC candles
+
+```
+GET /api/v1/subnet/{netuid}/candles?interval=1h&hours=168
+```
+
+Returns TradingView-style `[{t, o, h, l, c, n}]`. Valid intervals: `5m`, `15m`, `1h`, `4h`, `1d`. Drop straight into [lightweight-charts](https://github.com/tradingview/lightweight-charts) or Grafana.
+
+### Live stream
+
+```
+GET /api/v1/stream?netuid=1&netuid=64      # filter to specific subnets
+GET /api/v1/stream                         # all subnets
+```
+
+Server-Sent Events. Each event is the JSON body of a freshly inserted snapshot. Heartbeat comments (`: ping`) every 15s. Works with any SSE client; try `curl -N`.
+
+### Webhooks
+
+```
+POST   /api/v1/webhooks/subscribe
+GET    /api/v1/webhooks/{id}
+DELETE /api/v1/webhooks/{id}
+```
+
+Subscribe:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/webhooks/subscribe \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://your.endpoint/alerts",
+    "netuid": 51,
+    "metric": "alpha_price_tao",
+    "direction": "cross_up",
+    "threshold": 0.05
+  }'
+```
+
+Metrics: `alpha_price_tao`, `tao_in`, `alpha_in`, `market_cap_tao`. Directions: `above`, `below`, `cross_up`, `cross_down`. Webhooks fire once per threshold crossing, not on every poll. **Security:** the subscribe endpoint accepts any outbound URL, so do not expose this publicly without an auth proxy in front.
+
+### Embeddable sparkline
+
+```
+GET /embed/subnet/{netuid}/sparkline?hours=24&w=240&h=60&stroke=%2300d4aa
+```
+
+Returns an inline `image/svg+xml`. Drop into any README or landing page:
+
+```html
+<img src="https://your-opentao.example.com/embed/subnet/51/sparkline?hours=168" />
+```
+
+No API key, cache-friendly (`Cache-Control: public, max-age=60`).
 
 ## Usage Examples
 
@@ -184,6 +268,29 @@ for hk in data["hotkeys"]:
 r = httpx.get(f"{BASE}/emissions/51/40")
 em = r.json()
 print(f"Daily: {em['daily_tao']:.4f} TAO (${em['daily_usd']:.2f})")
+
+# OHLC candles — drop straight into a charting library
+r = httpx.get(f"{BASE}/subnet/51/candles", params={"interval": "1h", "hours": 48})
+for bar in r.json()[-5:]:
+    print(f"{bar['t']}  O={bar['o']:.6f}  H={bar['h']:.6f}  "
+          f"L={bar['l']:.6f}  C={bar['c']:.6f}")
+
+# Live SSE stream (one event per inserted snapshot)
+with httpx.stream("GET", f"{BASE}/stream", params={"netuid": 51}, timeout=None) as s:
+    for line in s.iter_lines():
+        if line.startswith("data: "):
+            event = __import__("json").loads(line[6:])
+            print(event["netuid"], event["alpha_price_tao"])
+
+# Subscribe a webhook for a price cross
+r = httpx.post(f"{BASE}/webhooks/subscribe", json={
+    "url": "https://your.endpoint/alerts",
+    "netuid": 51,
+    "metric": "alpha_price_tao",
+    "direction": "cross_up",
+    "threshold": 0.05,
+})
+print("Subscription:", r.json()["id"])
 ```
 
 ## Configuration
@@ -198,9 +305,10 @@ All settings via environment variables (or `.env` file):
 | `CACHE_TTL_PRICE` | `30` | Price cache seconds |
 | `CACHE_TTL_DYNAMIC_INFO` | `120` | Subnet pool data cache seconds |
 | `CACHE_TTL_BALANCE` | `60` | Balance/stake cache seconds |
+| `RPC_TIMEOUT` | `20.0` | Per-RPC timeout (seconds). Prevents a single slow chain call from blocking the whole poll cycle. |
 | `ARCHIVE_ENDPOINT` | `wss://archive.chain.opentensor.ai:443/` | Archive node for historical backfill |
 | `DATABASE_PATH` | `data/opentao.db` | SQLite database path for historical data |
-| `HISTORY_POLL_INTERVAL` | `1800` | Seconds between live snapshots (0 to disable) |
+| `HISTORY_POLL_INTERVAL` | `1800` | Seconds between live snapshots. `0` disables polling; `-1` polls every block (~12 s). |
 | `HISTORY_POLL_NETUIDS` | _(empty)_ | Comma-separated netuids to poll (empty = all active) |
 | `API_HOST` | `0.0.0.0` | Bind address |
 | `API_PORT` | `8000` | Port |
@@ -210,37 +318,50 @@ All settings via environment variables (or `.env` file):
 ```
 OpenTaoAPI/
 ├── api/
-│   ├── main.py                 # FastAPI app, routes, static file serving
+│   ├── main.py                 # FastAPI app, lifespan, poller + evaluator supervisors
 │   ├── config.py               # Settings from environment
 │   ├── routes/
 │   │   ├── price.py            # TAO price from MEXC
 │   │   ├── miner.py            # TaoStats-compatible miner endpoint
 │   │   ├── neuron.py           # Neuron lookup by UID/hotkey/coldkey
-│   │   ├── subnet.py           # Subnet info, metagraph, miners, validators
+│   │   ├── subnet.py           # Subnet info, metagraph, miners, validators, /subnets
 │   │   ├── emissions.py        # Emission breakdown
 │   │   ├── portfolio.py        # Cross-subnet portfolio
-│   │   └── history.py          # Historical data endpoints
+│   │   ├── history.py          # Historical snapshots + OHLC candles
+│   │   ├── stream.py           # Server-Sent Events live feed
+│   │   ├── webhooks.py         # Threshold-crossing webhook subscriptions
+│   │   └── embed.py            # Embeddable SVG sparkline widget
 │   ├── services/
-│   │   ├── chain_client.py     # Bittensor SDK wrapper (AsyncSubtensor)
-│   │   ├── price_client.py     # MEXC price feed
+│   │   ├── chain_client.py     # Bittensor SDK wrapper with per-RPC timeouts
+│   │   ├── price_client.py     # MEXC live price + historical klines
 │   │   ├── cache.py            # In-memory TTL cache
-│   │   ├── database.py         # SQLite storage for historical data
+│   │   ├── database.py         # SQLite storage (snapshots + webhook subscriptions)
+│   │   ├── broker.py           # Fan-out broker for live snapshot events
 │   │   ├── metagraph_compat.py # SDK version compatibility layer
 │   │   └── calculations.py     # Emission math
 │   └── models/
 │       └── schemas.py          # Pydantic response models
 ├── scripts/
-│   └── backfill.py             # Historical data scraper (archive node)
+│   ├── backfill.py             # Historical chain scraper (parallel, resumable)
+│   └── backfill_prices.py      # MEXC kline backfill for tao_price_usd
 ├── data/
 │   └── opentao.db              # SQLite database (created on first run)
 ├── frontend/
-│   ├── index.html              # Portfolio dashboard
-│   ├── subnets.html            # Subnets overview
-│   └── miners.html             # Miners/validators table
+│   ├── common.css              # Shared styles
+│   ├── subnets.html            # Subnets dashboard (landing page)
+│   ├── subnet-detail.html      # Per-subnet view: chart, miners, validators, embed
+│   ├── webhooks.html           # Webhook management UI
+│   ├── index.html              # Portfolio page (/portfolio)
+│   └── vendor/
+│       └── lightweight-charts.standalone.production.js  # TradingView charts, Apache-2.0
+├── docs/
+│   └── deploy-fly.md           # Fly.io deployment guide
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
-└── .env.example
+├── .env.example
+├── .gitignore
+└── LICENSE
 ```
 
 ## How It Works
@@ -262,18 +383,27 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 
 **Caching:** metagraph syncs are expensive (~10-20s cold). All queries are cached in-memory with configurable TTLs. Use `?refresh=true` on metagraph endpoints to force a fresh sync.
 
-## Comparison to TaoStats
+## Comparison
 
-| Feature | TaoStats | OpenTaoAPI |
-|---|---|---|
-| Rate limit | 5 req/min (free) | None on API; RPC-limited by subtensor node (use your own node for unlimited) |
-| API key required | Yes | No |
-| Source code | Closed | MIT open source |
-| Self-hostable | No | Yes |
-| Miner endpoint | `/api/miner/{coldkey}/{netuid}` | `/api/v1/miner/{coldkey}/{netuid}` (compatible format) |
-| Web UI | Full explorer | Portfolio, subnets, miners/validators |
-| Historical data | Yes | Yes (SQLite, epoch-resolution via archive node) |
-| Price source | Multiple | MEXC |
+| Feature | OpenTaoAPI | TaoStats | CoinMarketCap | tao.app |
+|---|---|---|---|---|
+| Open source | ✅ MIT | ❌ | ❌ | ❌ |
+| Self-hostable | ✅ | ❌ | ❌ | ❌ |
+| API key required | ❌ | ✅ | ✅ | ✅ |
+| Rate-limited (free tier) | None on API | 5 req/min | yes | yes |
+| Subnet prices / market cap | ✅ | ✅ | ✅ (limited) | ✅ |
+| OHLC candles | ✅ | ❌ | ❌ | ✅ |
+| Full metagraph export | ✅ | limited | ❌ | limited |
+| Miner / validator tables | ✅ | ✅ | ❌ | ✅ |
+| Coldkey portfolio view | ✅ | ✅ | ❌ | ✅ |
+| TaoStats-compatible `miner` endpoint | ✅ | — | ❌ | ❌ |
+| Webhook alerts | ✅ | ❌ | ❌ | ❌ |
+| Live event stream (SSE) | ✅ | ❌ | ❌ | ❌ |
+| Embeddable widgets | ✅ | ❌ | ❌ | ❌ |
+
+## Hosted demo
+
+A public demo is planned; see `docs/deploy-fly.md` for the one-command Fly deployment. In the meantime, `docker compose up -d` or the `conda` path in [Quick Start](#quick-start) gets you a local instance in under a minute. The demo is there to evaluate the API shape quickly; for anything beyond light testing please self-host.
 
 ## Support
 
@@ -282,6 +412,10 @@ If this project is useful to you, consider supporting development:
 ```
 TAO: 5EhrSbeGeiLgsXcJTXXaBCcqrrMubvWcykSwk4Ho6KUd5sQG
 ```
+
+## Contact
+
+Built by Ryan Mercier ([github.com/ryanmercier](https://github.com/ryanmercier)). Open to roles in Bittensor infrastructure, analytics, or trading tooling — issues and PRs welcome, or reach out directly.
 
 ## License
 

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+WebhookMetric = Literal["alpha_price_tao", "tao_in", "alpha_in", "market_cap_tao"]
+WebhookDirection = Literal["above", "below", "cross_up", "cross_down"]
 
 
 class ColdkeyInfo(BaseModel):
@@ -208,3 +213,28 @@ class HistoryStatsResponse(BaseModel):
     earliest_time: str | None = None
     latest_time: str | None = None
     total_snapshots: int
+
+
+class WebhookSubscribeRequest(BaseModel):
+    url: str = Field(..., max_length=2048, description="http(s) URL to POST on threshold crossings")
+    metric: WebhookMetric = Field(..., description="Which metric to watch")
+    threshold: float = Field(..., ge=-1e15, le=1e15)
+    direction: WebhookDirection = Field(
+        ..., description="above/below fire whenever the value is on that side after being on the other; cross_up/cross_down fire only on the crossing event"
+    )
+    netuid: int | None = Field(
+        default=None, ge=0, le=65535, description="Scope to a single subnet; omit for all"
+    )
+
+
+class WebhookSubscribeResponse(BaseModel):
+    id: int
+    url: str
+    metric: WebhookMetric
+    threshold: float
+    direction: WebhookDirection
+    netuid: int | None
+    created_at: str
+    active: bool
+    last_value: float | None = None
+    last_fired_at: str | None = None

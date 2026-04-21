@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webhooks — OpenTaoAPI</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+.nav-links { margin-left: auto; }
+
+.page-head {
+  padding: 24px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.page-head h1 {
+  font-size: 20px;
+  color: var(--text-bright);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.page-head p {
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 680px;
+  line-height: 1.6;
+}
+
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 20px;
+  margin: 20px 0;
+}
+
+.card h2 {
+  font-size: 13px;
+  color: var(--text-bright);
+  margin-bottom: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Two-line layout: URL spans the full width (real URLs are long), then the
+   rest of the fields + submit share a second row. Collapses to stacked on
+   narrow screens via the media query below. */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 120px 180px 180px 140px auto;
+  grid-template-areas:
+    "url url url url url url"
+    "netuid metric direction threshold submit submit";
+  gap: 12px 10px;
+  align-items: end;
+}
+.form-field.url       { grid-area: url; }
+.form-field.netuid    { grid-area: netuid; }
+.form-field.metric    { grid-area: metric; }
+.form-field.direction { grid-area: direction; }
+.form-field.threshold { grid-area: threshold; }
+.form-field.submit    { grid-area: submit; }
+.form-field.submit .btn { width: 100%; justify-content: center; }
+
+.form-field label {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+}
+
+.form-field input,
+.form-field select {
+  width: 100%;
+  padding: 8px 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.form-field input:focus,
+.form-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 212, 170, 0.12);
+}
+
+.form-msg { margin-top: 12px; font-size: 12px; }
+.form-msg.ok  { color: var(--accent); }
+.form-msg.err { color: var(--red); }
+
+.hook-table-wrap { overflow-x: auto; padding-bottom: 64px; }
+
+.hook-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1000px;
+}
+
+.hook-table th {
+  text-align: right;
+  font-weight: 400;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  padding: 10px 12px 10px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.hook-table th:first-child,
+.hook-table th:nth-child(2),
+.hook-table th:nth-child(3),
+.hook-table th:nth-child(4),
+.hook-table th:nth-child(5) { text-align: left; }
+
+.hook-table th:hover { color: var(--text); }
+.hook-table th.sorted { color: var(--accent); }
+.hook-table th .arrow { font-size: 9px; margin-left: 2px; }
+
+.hook-table td {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 10px 12px 10px 0;
+  border-bottom: 1px solid #141414;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.hook-table td:first-child,
+.hook-table td:nth-child(2),
+.hook-table td:nth-child(3),
+.hook-table td:nth-child(4),
+.hook-table td:nth-child(5) { text-align: left; }
+
+.hook-table .url-cell {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.hook-table .url-cell .copy-btn { opacity: 0; }
+.hook-table tr:hover .copy-btn { opacity: 0.6; }
+
+.metric-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.dir-up   { color: var(--accent); }
+.dir-down { color: var(--red); }
+
+.empty-state {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.empty-state p { margin-bottom: 4px; }
+
+@media (max-width: 900px) {
+  /* Stack every field on narrow screens — grid-template-areas wins over
+     a plain column change, so clear it explicitly. */
+  .form-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+  .form-field { grid-area: auto !important; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container-wide inner">
+    <a href="/" class="logo">Open<span>Tao</span>API</a>
+    <div class="nav-links">
+      <a href="/">Subnets</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/webhooks" class="active">Webhooks</a>
+      <a href="/docs">API Docs</a>
+    </div>
+  </div>
+</header>
+
+<div class="container-wide">
+  <div class="page-head">
+    <h1>Webhook subscriptions</h1>
+    <p>
+      Outbound POSTs fire once per threshold crossing on subnet snapshots — good for Discord bots,
+      Slack alerts, or trading automations. Metrics: <code>alpha_price_tao</code>, <code>tao_in</code>,
+      <code>alpha_in</code>, <code>market_cap_tao</code>. Directions: <code>above</code>, <code>below</code>,
+      <code>cross_up</code>, <code>cross_down</code>.
+    </p>
+    <p style="color: var(--red); margin-top: 8px;">
+      Security: this UI has no auth. Don't expose <code>/webhooks</code> publicly without a proxy.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Create subscription</h2>
+    <form id="createForm" class="form-grid">
+      <div class="form-field url">
+        <label for="fieldUrl">Webhook URL</label>
+        <input id="fieldUrl" name="url" type="url" placeholder="https://your.endpoint/alerts" required>
+      </div>
+      <div class="form-field netuid">
+        <label for="fieldNetuid">Netuid</label>
+        <input id="fieldNetuid" name="netuid" type="number" placeholder="all">
+      </div>
+      <div class="form-field metric">
+        <label for="fieldMetric">Metric</label>
+        <select id="fieldMetric" name="metric">
+          <option value="alpha_price_tao">alpha_price_tao</option>
+          <option value="tao_in">tao_in</option>
+          <option value="alpha_in">alpha_in</option>
+          <option value="market_cap_tao">market_cap_tao</option>
+        </select>
+      </div>
+      <div class="form-field direction">
+        <label for="fieldDirection">Direction</label>
+        <select id="fieldDirection" name="direction">
+          <option value="cross_up">cross_up</option>
+          <option value="cross_down">cross_down</option>
+          <option value="above">above</option>
+          <option value="below">below</option>
+        </select>
+      </div>
+      <div class="form-field threshold">
+        <label for="fieldThreshold">Threshold</label>
+        <input id="fieldThreshold" name="threshold" type="number" step="any" required>
+      </div>
+      <div class="form-field submit">
+        <button type="submit" class="btn btn-primary">Create subscription</button>
+      </div>
+    </form>
+    <div id="formMsg" class="form-msg"></div>
+  </div>
+
+  <main class="hook-table-wrap">
+    <div id="tableContent">
+      <div class="loading"><div class="spinner"></div><p>Loading subscriptions…</p></div>
+    </div>
+  </main>
+</div>
+
+<footer>
+  <div class="container-wide">
+    <p>
+      <a href="/docs">API Docs</a> &middot;
+      <a href="https://github.com/ryanmercier/OpenTaoAPI">Source</a> &middot;
+      Powered by <a href="https://bittensor.com">Bittensor</a>
+    </p>
+  </div>
+</footer>
+
+<script>
+const API = '/api/v1';
+
+let subs = [];
+let currentSort = 'id';
+let currentOrder = 'desc';
+
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s ?? ''); return d.innerHTML; }
+function truncUrl(u) {
+  if (!u) return '';
+  if (u.length <= 42) return u;
+  return u.slice(0, 22) + '…' + u.slice(-18);
+}
+function fmtNumber(n) {
+  if (n === null || n === undefined) return '—';
+  if (Number.isInteger(n)) return n;
+  if (Math.abs(n) < 0.001) return n.toExponential(2);
+  if (Math.abs(n) < 1) return n.toFixed(5);
+  if (Math.abs(n) < 1000) return n.toFixed(2);
+  return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch { return iso; }
+}
+
+async function copyText(text) { try { await navigator.clipboard.writeText(text); } catch {} }
+
+function dirClass(dir) {
+  if (dir === 'above' || dir === 'cross_up') return 'dir-up';
+  if (dir === 'below' || dir === 'cross_down') return 'dir-down';
+  return '';
+}
+
+function render() {
+  const container = document.getElementById('tableContent');
+  if (!subs.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <p>No active webhook subscriptions.</p>
+        <p style="font-size:11px">Use the form above to create one.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const sc = col => col === currentSort ? ' class="sorted"' : '';
+  const arrow = col => col === currentSort
+    ? `<span class="arrow">${currentOrder === 'asc' ? '▲' : '▼'}</span>` : '';
+
+  const sorted = [...subs].sort((a, b) => {
+    const va = a[currentSort], vb = b[currentSort];
+    const rev = currentOrder === 'desc';
+    if (va === null || va === undefined) return 1;
+    if (vb === null || vb === undefined) return -1;
+    if (typeof va === 'string') return rev ? vb.localeCompare(va) : va.localeCompare(vb);
+    return rev ? vb - va : va - vb;
+  });
+
+  container.innerHTML = `
+    <table class="hook-table">
+      <thead>
+        <tr>
+          <th${sc('id')} data-col="id">ID${arrow('id')}</th>
+          <th>URL</th>
+          <th${sc('netuid')} data-col="netuid">Netuid${arrow('netuid')}</th>
+          <th${sc('metric')} data-col="metric">Metric${arrow('metric')}</th>
+          <th${sc('direction')} data-col="direction">Direction${arrow('direction')}</th>
+          <th${sc('threshold')} data-col="threshold">Threshold${arrow('threshold')}</th>
+          <th${sc('last_value')} data-col="last_value">Last Value${arrow('last_value')}</th>
+          <th${sc('last_fired_at')} data-col="last_fired_at">Last Fired${arrow('last_fired_at')}</th>
+          <th${sc('created_at')} data-col="created_at">Created${arrow('created_at')}</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${sorted.map(s => `
+          <tr data-id="${s.id}">
+            <td>${s.id}</td>
+            <td class="url-cell" title="${esc(s.url)}">
+              <span>${esc(truncUrl(s.url))}</span>
+              <button class="copy-btn" data-copy="${esc(s.url)}" title="Copy">⧉</button>
+            </td>
+            <td>${s.netuid === null || s.netuid === undefined ? 'all' : s.netuid}</td>
+            <td><span class="metric-badge">${esc(s.metric)}</span></td>
+            <td class="${dirClass(s.direction)}">${esc(s.direction)}</td>
+            <td>${fmtNumber(s.threshold)}</td>
+            <td>${fmtNumber(s.last_value)}</td>
+            <td>${fmtDate(s.last_fired_at)}</td>
+            <td>${fmtDate(s.created_at)}</td>
+            <td><button class="btn btn-danger" data-delete="${s.id}">Delete</button></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+
+  container.querySelectorAll('.hook-table th[data-col]').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      if (currentSort === col) currentOrder = currentOrder === 'asc' ? 'desc' : 'asc';
+      else { currentSort = col; currentOrder = 'desc'; }
+      render();
+    });
+  });
+
+  container.querySelectorAll('.copy-btn[data-copy]').forEach(btn => {
+    btn.addEventListener('click', () => copyText(btn.dataset.copy));
+  });
+
+  container.querySelectorAll('button[data-delete]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.delete;
+      if (!confirm(`Deactivate webhook #${id}?`)) return;
+      try {
+        const res = await fetch(`${API}/webhooks/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        subs = subs.filter(s => String(s.id) !== String(id));
+        render();
+      } catch (e) {
+        alert('Delete failed: ' + e.message);
+      }
+    });
+  });
+}
+
+async function load() {
+  try {
+    const res = await fetch(`${API}/webhooks`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    subs = await res.json();
+    render();
+  } catch (e) {
+    document.getElementById('tableContent').innerHTML =
+      `<div class="error-msg">${esc(e.message)}</div>`;
+  }
+}
+
+document.getElementById('createForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const netuidVal = document.getElementById('fieldNetuid').value.trim();
+  const payload = {
+    url: document.getElementById('fieldUrl').value.trim(),
+    metric: document.getElementById('fieldMetric').value,
+    direction: document.getElementById('fieldDirection').value,
+    threshold: parseFloat(document.getElementById('fieldThreshold').value),
+    netuid: netuidVal === '' ? null : parseInt(netuidVal, 10),
+  };
+  const msg = document.getElementById('formMsg');
+  msg.className = 'form-msg';
+  msg.textContent = '';
+  try {
+    const res = await fetch(`${API}/webhooks/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+    msg.className = 'form-msg ok';
+    msg.textContent = `Subscription #${body.id} created.`;
+    document.getElementById('createForm').reset();
+    load();
+  } catch (err) {
+    msg.className = 'form-msg err';
+    msg.textContent = err.message;
+  }
+});
+
+load();
+setInterval(load, 30_000);
+</script>
+
+</body>
+</html>

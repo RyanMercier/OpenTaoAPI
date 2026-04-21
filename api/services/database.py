@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
@@ -28,6 +29,26 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_netuid_block
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_netuid_ts
     ON subnet_snapshots(netuid, timestamp);
+
+-- Standalone timestamp index lets queries across all subnets use the index
+-- (the composite index above can't help when netuid isn't in the predicate).
+CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp
+    ON subnet_snapshots(timestamp);
+
+CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    netuid INTEGER,               -- NULL means any subnet
+    metric TEXT NOT NULL,         -- alpha_price_tao | tao_in | alpha_in | market_cap_tao
+    threshold REAL NOT NULL,
+    direction TEXT NOT NULL CHECK(direction IN ('above','below','cross_up','cross_down')),
+    created_at TEXT NOT NULL,
+    last_fired_at TEXT,
+    last_value REAL,
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhook_subscriptions(active);
 """
 
 
@@ -35,6 +56,10 @@ class Database:
     def __init__(self, db_path: str):
         self._path = db_path
         self._db: Optional[aiosqlite.Connection] = None
+        # Serialize writes so the poller + webhook evaluator don't interleave
+        # transactions on the shared aiosqlite connection. Reads are
+        # unguarded — SQLite handles concurrent readers fine.
+        self._write_lock = asyncio.Lock()
 
     async def startup(self):
         Path(self._path).parent.mkdir(parents=True, exist_ok=True)
@@ -49,33 +74,38 @@ class Database:
             await self._db.close()
 
     async def insert_snapshot(self, data: dict) -> bool:
-        """Insert a snapshot row. Returns True if inserted, False if duplicate."""
-        try:
-            cursor = await self._db.execute(
-                """INSERT OR IGNORE INTO subnet_snapshots
-                   (block, timestamp, netuid, alpha_price_tao, tao_price_usd,
-                    tao_in, alpha_in, total_stake, emission_rate,
-                    validator_count, neuron_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    data["block"],
-                    data["timestamp"],
-                    data["netuid"],
-                    data.get("alpha_price_tao"),
-                    data.get("tao_price_usd"),
-                    data.get("tao_in"),
-                    data.get("alpha_in"),
-                    data.get("total_stake"),
-                    data.get("emission_rate"),
-                    data.get("validator_count"),
-                    data.get("neuron_count"),
-                ),
-            )
-            await self._db.commit()
-            return cursor.rowcount > 0
-        except Exception as e:
-            logger.error(f"Failed to insert snapshot: {e}")
-            return False
+        """Insert a snapshot row. Returns True if inserted, False if a row
+        for (block, netuid) already existed."""
+        async with self._write_lock:
+            try:
+                cursor = await self._db.execute(
+                    """INSERT OR IGNORE INTO subnet_snapshots
+                       (block, timestamp, netuid, alpha_price_tao, tao_price_usd,
+                        tao_in, alpha_in, total_stake, emission_rate,
+                        validator_count, neuron_count)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        data["block"],
+                        data["timestamp"],
+                        data["netuid"],
+                        data.get("alpha_price_tao"),
+                        data.get("tao_price_usd"),
+                        data.get("tao_in"),
+                        data.get("alpha_in"),
+                        data.get("total_stake"),
+                        data.get("emission_rate"),
+                        data.get("validator_count"),
+                        data.get("neuron_count"),
+                    ),
+                )
+                await self._db.commit()
+                return cursor.rowcount > 0
+            except aiosqlite.IntegrityError:
+                # Duplicate (block, netuid) — a poller race or resume-replay.
+                return False
+            except Exception:
+                logger.exception("Failed to insert snapshot")
+                return False
 
     async def insert_batch(self, rows: list[dict]) -> int:
         """Insert multiple snapshots. Returns count of new rows."""
@@ -99,12 +129,17 @@ class Database:
     async def get_price_history(
         self, netuid: int, hours: int = 24, limit: int = 500
     ) -> list[dict]:
-        """Get alpha price history for a subnet over the last N hours."""
+        """Get alpha price history for a subnet over the last N hours.
+
+        Uses ``datetime(timestamp)`` so SQLite parses the ISO-with-offset
+        string we store (``2026-04-20T18:45:00+00:00``) rather than
+        comparing strings lexically.
+        """
         cursor = await self._db.execute(
             """SELECT block, timestamp, alpha_price_tao, tao_price_usd
                FROM subnet_snapshots
                WHERE netuid = ?
-                 AND timestamp >= datetime('now', ?)
+                 AND datetime(timestamp) >= datetime('now', ?)
                ORDER BY block ASC
                LIMIT ?""",
             (netuid, f"-{hours} hours", limit),
@@ -125,7 +160,7 @@ class Database:
                       validator_count, neuron_count
                FROM subnet_snapshots
                WHERE netuid = ?
-                 AND timestamp >= datetime('now', ?)
+                 AND datetime(timestamp) >= datetime('now', ?)
                ORDER BY block ASC
                LIMIT ?""",
             (netuid, f"-{hours} hours", limit),
@@ -165,9 +200,196 @@ class Database:
             "total_snapshots": row["total_snapshots"],
         }
 
+    async def get_candles(
+        self,
+        netuid: int,
+        interval_seconds: int,
+        hours: int,
+    ) -> list[dict]:
+        """Aggregate ``subnet_snapshots`` into OHLC buckets.
+
+        For each bucket we compute open/close by block order (so a single
+        bucket with one sample still returns a sensible candle) and
+        high/low as MIN/MAX across ``alpha_price_tao``.
+        """
+        bucket = int(interval_seconds)
+        window = f"-{int(hours)} hours"
+        cursor = await self._db.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    (CAST(strftime('%s', timestamp) AS INTEGER) / :bucket) * :bucket AS t,
+                    alpha_price_tao AS price,
+                    block,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY (CAST(strftime('%s', timestamp) AS INTEGER) / :bucket)
+                        ORDER BY block ASC
+                    ) AS rn_asc,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY (CAST(strftime('%s', timestamp) AS INTEGER) / :bucket)
+                        ORDER BY block DESC
+                    ) AS rn_desc
+                FROM subnet_snapshots
+                WHERE netuid = :netuid
+                  AND datetime(timestamp) >= datetime('now', :window)
+                  AND alpha_price_tao IS NOT NULL
+            )
+            SELECT
+                t,
+                MAX(CASE WHEN rn_asc  = 1 THEN price END) AS open,
+                MAX(CASE WHEN rn_desc = 1 THEN price END) AS close,
+                MAX(price) AS high,
+                MIN(price) AS low,
+                COUNT(*) AS samples
+            FROM ranked
+            GROUP BY t
+            ORDER BY t ASC
+            """,
+            {
+                "bucket": bucket,
+                "netuid": netuid,
+                "window": window,
+            },
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "t": int(r["t"]),
+                "o": r["open"],
+                "h": r["high"],
+                "l": r["low"],
+                "c": r["close"],
+                "n": r["samples"],
+            }
+            for r in rows
+        ]
+
     async def get_snapshot_count(self) -> int:
         cursor = await self._db.execute(
             "SELECT COUNT(*) FROM subnet_snapshots"
         )
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+    # --- Webhooks ---
+
+    async def create_webhook(
+        self,
+        url: str,
+        metric: str,
+        threshold: float,
+        direction: str,
+        netuid: int | None,
+        created_at: str,
+    ) -> int:
+        async with self._write_lock:
+            cursor = await self._db.execute(
+                """INSERT INTO webhook_subscriptions
+                     (url, netuid, metric, threshold, direction, created_at, active)
+                   VALUES (?, ?, ?, ?, ?, ?, 1)""",
+                (url, netuid, metric, threshold, direction, created_at),
+            )
+            await self._db.commit()
+            return cursor.lastrowid
+
+    async def get_webhook(self, sub_id: int) -> dict | None:
+        cursor = await self._db.execute(
+            "SELECT * FROM webhook_subscriptions WHERE id = ?", (sub_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_active_webhooks(self) -> list[dict]:
+        cursor = await self._db.execute(
+            "SELECT * FROM webhook_subscriptions WHERE active = 1"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def deactivate_webhook(self, sub_id: int) -> bool:
+        async with self._write_lock:
+            cursor = await self._db.execute(
+                "UPDATE webhook_subscriptions SET active = 0 WHERE id = ?",
+                (sub_id,),
+            )
+            await self._db.commit()
+            return cursor.rowcount > 0
+
+    async def update_webhook_fired(
+        self, sub_id: int, value: float, fired_at: str
+    ) -> None:
+        async with self._write_lock:
+            await self._db.execute(
+                """UPDATE webhook_subscriptions
+                   SET last_value = ?, last_fired_at = ?
+                   WHERE id = ?""",
+                (value, fired_at, sub_id),
+            )
+            await self._db.commit()
+
+    async def update_webhook_value(self, sub_id: int, value: float) -> None:
+        """Record observed value without marking a fire — used when we
+        evaluate but don't cross the threshold."""
+        async with self._write_lock:
+            await self._db.execute(
+                "UPDATE webhook_subscriptions SET last_value = ? WHERE id = ?",
+                (value, sub_id),
+            )
+            await self._db.commit()
+
+    async def get_latest_metric(self, netuid: int, metric: str) -> float | None:
+        """Most recent value of a metric for a subnet. ``market_cap_tao`` is
+        derived from tao_in (the pool-side TAO). Returns None if no data."""
+        column_map = {
+            "alpha_price_tao": "alpha_price_tao",
+            "tao_in": "tao_in",
+            "alpha_in": "alpha_in",
+            "market_cap_tao": "tao_in",
+        }
+        col = column_map.get(metric)
+        if col is None:
+            return None
+        cursor = await self._db.execute(
+            f"""SELECT {col} FROM subnet_snapshots
+                WHERE netuid = ?
+                ORDER BY block DESC LIMIT 1""",
+            (netuid,),
+        )
+        row = await cursor.fetchone()
+        if not row or row[0] is None:
+            return None
+        return float(row[0])
+
+    async def get_missing_price_range(self) -> tuple[str, str] | None:
+        """Min/max timestamp of rows with no USD price. Returns None if
+        every row already has a price."""
+        cursor = await self._db.execute(
+            """SELECT MIN(timestamp), MAX(timestamp)
+               FROM subnet_snapshots
+               WHERE tao_price_usd IS NULL OR tao_price_usd = 0"""
+        )
+        row = await cursor.fetchone()
+        if not row or row[0] is None:
+            return None
+        return row[0], row[1]
+
+    async def update_tao_prices_hourly(self, prices_by_hour: dict[str, float]) -> int:
+        """Fill ``tao_price_usd`` for rows whose timestamp falls in one of the
+        supplied hour buckets (format ``YYYY-MM-DDTHH``). Only touches rows
+        where the price is currently zero/NULL so re-running is idempotent.
+        Returns the number of rows updated."""
+        if not prices_by_hour:
+            return 0
+        updated = 0
+        async with self._write_lock:
+            for hour_key, price in prices_by_hour.items():
+                cursor = await self._db.execute(
+                    """UPDATE subnet_snapshots
+                       SET tao_price_usd = ?
+                       WHERE (tao_price_usd IS NULL OR tao_price_usd = 0)
+                         AND substr(timestamp, 1, 13) = ?""",
+                    (price, hour_key),
+                )
+                updated += cursor.rowcount
+            await self._db.commit()
+        return updated

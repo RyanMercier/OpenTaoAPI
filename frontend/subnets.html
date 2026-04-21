@@ -6,10 +6,8 @@
 <title>Subnets — OpenTaoAPI</title>
 <link rel="stylesheet" href="/static/common.css">
 <style>
-.container { max-width: 1200px; }
 :root { --green: #00d4aa; }
 .nav-links { margin-left: auto; }
-.nav-links a.active { color: var(--text-bright); }
 
 .summary-bar {
   padding: 20px 0;
@@ -181,6 +179,16 @@
   font-weight: 500;
 }
 
+/* Sparkline column */
+.sparkline-cell { width: 140px; padding-right: 0 !important; }
+.sparkline-cell img {
+  display: block;
+  margin-left: auto;
+  opacity: 0.9;
+  min-width: 120px;
+  min-height: 28px;
+}
+
 /* Values */
 .emission-cell { color: var(--text); }
 .emission-zero { color: var(--text-dim); }
@@ -201,17 +209,18 @@
 <body>
 
 <header>
-  <div class="container inner">
+  <div class="container-wide inner">
     <a href="/" class="logo">Open<span>Tao</span>API</a>
     <div class="nav-links">
-      <a href="/subnets" class="active">Subnets</a>
-      <a href="/">Portfolio</a>
+      <a href="/" class="active">Subnets</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/webhooks">Webhooks</a>
       <a href="/docs">API Docs</a>
     </div>
   </div>
 </header>
 
-<div class="container">
+<div class="container-wide">
   <div class="summary-bar" id="summaryBar" style="display:none">
     <div class="summary-stat">
       <div class="summary-label">Sum of Subnet Prices</div>
@@ -234,7 +243,7 @@
   </div>
 </div>
 
-<main class="container">
+<main class="container-wide">
   <div id="content">
     <div class="loading">
       <div class="spinner"></div>
@@ -244,7 +253,7 @@
 </main>
 
 <footer>
-  <div class="container">
+  <div class="container-wide">
     <p>
       <a href="/docs">API Docs</a> &middot;
       <a href="https://github.com/ryanmercier/OpenTaoAPI">Source</a> &middot;
@@ -334,6 +343,7 @@ function renderTable(data) {
             <th${sc('name')} data-col="name">Subnet${arrow('name')}</th>
             <th${sc('emission')} data-col="emission">Emission${arrow('emission')}</th>
             <th${sc('price')} data-col="price">Price${arrow('price')}</th>
+            <th>24H</th>
             <th${sc('market_cap')} data-col="market_cap">Market Cap${arrow('market_cap')}</th>
             <th${sc('volume')} data-col="volume">24H Volume${arrow('volume')}</th>
             <th${sc('supply')} data-col="supply">Circulating Supply${arrow('supply')}</th>
@@ -351,6 +361,7 @@ function renderTable(data) {
               </td>
               <td class="${s.emission_pct > 0 ? 'emission-cell' : 'emission-zero'}">${fmtPct(s.emission_pct)}</td>
               <td class="price-cell">${s.netuid === 0 ? 'τ1' : fmtTao(s.price)}</td>
+              <td class="sparkline-cell"><img src="/embed/subnet/${s.netuid}/sparkline?hours=24&w=120&h=28" alt="" loading="lazy"></td>
               <td class="mcap-cell">${fmtTao(s.market_cap_tao)}</td>
               <td class="volume-cell">${s.volume_tao > 0 ? fmtTao(s.volume_tao) : '—'}</td>
               <td class="supply-cell">${fmtSupply(s.supply)}</td>
@@ -384,11 +395,11 @@ function renderTable(data) {
     });
   });
 
-  // Row click → miners page
+  // Row click → subnet detail page
   content.querySelectorAll('.subnets-table tbody tr').forEach(tr => {
     tr.addEventListener('click', () => {
       const nuid = tr.dataset.netuid;
-      if (nuid !== undefined) location.href = `/subnet/${nuid}/miners`;
+      if (nuid !== undefined) location.href = `/subnet/${nuid}`;
     });
   });
 }
@@ -417,6 +428,73 @@ async function load() {
 }
 
 load();
+
+// Live SSE updates: patch price and market-cap cells in place.
+function flashCell(el, direction) {
+  if (!el) return;
+  el.classList.remove('flash', 'flash-down');
+  void el.offsetWidth; // force reflow so animation restarts
+  el.classList.add(direction === 'down' ? 'flash-down' : 'flash');
+}
+
+let lastEventAt = Date.now();
+let es = null;
+
+function connectSSE() {
+  if (es) es.close();
+  es = new EventSource(`${API}/stream`);
+  es.onmessage = (ev) => {
+    lastEventAt = Date.now();
+    let event;
+    try { event = JSON.parse(ev.data); } catch { return; }
+    if (!allData) return;
+    const row = allData.subnets.find(s => s.netuid === event.netuid);
+    if (!row) return;
+    const tr = document.querySelector(
+      `.subnets-table tbody tr[data-netuid="${event.netuid}"]`
+    );
+    const prevPrice = row.price;
+    const newPrice = event.alpha_price_tao ?? prevPrice;
+    row.price = newPrice;
+    if (event.tao_in !== undefined) {
+      row.tao_in = event.tao_in;
+      row.market_cap_tao = event.tao_in;  // server: market_cap_tao = tao_in
+    }
+    if (event.alpha_in !== undefined) row.alpha_in = event.alpha_in;
+    if (!tr) return;
+    const direction = newPrice >= prevPrice ? 'up' : 'down';
+    const priceCell = tr.querySelector('.price-cell');
+    const mcapCell = tr.querySelector('.mcap-cell');
+    if (priceCell) {
+      priceCell.textContent = event.netuid === 0 ? 'τ1' : fmtTao(newPrice);
+      flashCell(priceCell, direction);
+    }
+    if (mcapCell) {
+      mcapCell.textContent = fmtTao(row.market_cap_tao);
+      flashCell(mcapCell, direction);
+    }
+  };
+  es.onerror = () => { /* EventSource auto-reconnects */ };
+}
+
+connectSSE();
+
+// Staleness guard — reconnect + refetch if silent for 90 s.
+setInterval(() => {
+  if (Date.now() - lastEventAt > 90_000) {
+    connectSSE();
+    load();
+    lastEventAt = Date.now();
+  }
+}, 30_000);
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && Date.now() - lastEventAt > 60_000) {
+    connectSSE();
+    load();
+    lastEventAt = Date.now();
+  }
+});
 </script>
 
 </body>

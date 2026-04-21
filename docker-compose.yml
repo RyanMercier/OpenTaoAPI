@@ -11,6 +11,7 @@ services:
       - CACHE_TTL_PRICE=30
       - CACHE_TTL_DYNAMIC_INFO=120
       - CACHE_TTL_BALANCE=60
+      - RPC_TIMEOUT=20.0
       - DATABASE_PATH=data/opentao.db
       - ARCHIVE_ENDPOINT=wss://archive.chain.opentensor.ai:443/
       - HISTORY_POLL_INTERVAL=1800

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     cache_ttl_price: int = 30
     cache_ttl_dynamic_info: int = 120
     cache_ttl_balance: int = 60
+    rpc_timeout: float = 20.0
     database_path: str = "data/opentao.db"
     history_poll_interval: int = 1800  # seconds between live snapshots
     history_poll_netuids: str = ""  # comma-separated, empty = all active

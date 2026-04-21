@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subnet — OpenTaoAPI</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+.nav-links { margin-left: auto; }
+
+.subnet-header {
+  padding: 24px 0 18px;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.subnet-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 4px;
+}
+
+.subnet-title .sn-num {
+  color: var(--text-dim);
+  font-weight: 400;
+  font-family: var(--mono);
+  font-size: 13px;
+  margin-left: 8px;
+}
+
+.price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 6px 0 10px;
+}
+
+.price-big {
+  font-family: var(--mono);
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-bright);
+  letter-spacing: -0.5px;
+}
+
+.price-pct {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+
+.price-pct.up   { color: var(--accent); background: rgba(0, 212, 170, 0.08); }
+.price-pct.down { color: var(--red);    background: rgba(232, 72, 85, 0.08); }
+
+.subnet-meta {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+  align-self: start;
+}
+
+.meta-strip {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 10px 0;
+  display: flex;
+  gap: 20px;
+}
+
+/* Tabs already in common.css */
+
+/* Chart panel — interval selector is a single segmented control so the
+   buttons feel like one object rather than five loose chips. */
+.interval-bar {
+  display: inline-flex;
+  margin-bottom: 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px;
+}
+.interval-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  padding: 5px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color 0.12s, background 0.12s;
+}
+.interval-btn:hover { color: var(--text-bright); }
+.interval-btn.active {
+  color: #000;
+  background: var(--accent);
+  font-weight: 600;
+}
+.interval-btn.active:hover { color: #000; }
+.chart-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  margin-bottom: 6px;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pill-pulse 1.2s ease-in-out infinite;
+}
+@keyframes pill-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 1; }
+}
+
+#chart { width: 100%; height: 420px; }
+.chart-empty {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* Embed panel */
+.embed-box {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  display: flex;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+.embed-code {
+  flex: 1;
+  word-break: break-all;
+  white-space: pre-wrap;
+  color: var(--text-bright);
+}
+.embed-preview {
+  padding: 16px;
+  border: 1px dashed var(--border);
+  text-align: center;
+}
+
+/* Miners/validators tables — ported from miners.html */
+.miners-wrap { padding: 0 0 64px; overflow-x: auto; }
+
+.miners-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 900px;
+}
+
+.miners-table th {
+  text-align: right;
+  font-weight: 400;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  padding: 10px 12px 10px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+
+.miners-table th:first-child,
+.miners-table th:nth-child(2),
+.miners-table th:nth-child(3),
+.miners-table th:nth-child(4),
+.miners-table th:nth-child(5) { text-align: left; }
+
+.miners-table th:hover { color: var(--text); }
+.miners-table th.sorted { color: var(--accent); }
+.miners-table th .arrow { font-size: 9px; margin-left: 2px; }
+
+.miners-table td {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid #141414;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.miners-table td:first-child,
+.miners-table td:nth-child(2),
+.miners-table td:nth-child(3),
+.miners-table td:nth-child(4),
+.miners-table td:nth-child(5) { text-align: left; }
+
+.miners-table tr:hover td { background: #0d0d0d; }
+
+.rank-cell { color: var(--text-dim); font-size: 11px; min-width: 30px; }
+.uid-cell { color: var(--text-bright); font-weight: 500; min-width: 40px; }
+.key-cell { color: var(--text-dim); font-size: 12px; }
+.key-cell a { color: var(--text-dim); }
+.key-cell a:hover { color: var(--accent); }
+.key-cell .copy-btn { opacity: 0; }
+.miners-table tr:hover .copy-btn { opacity: 0.6; }
+
+.ip-cell { color: var(--text-dim); font-size: 11px; }
+.incentive-cell { color: var(--text-bright); }
+.incentive-zero { color: var(--text-dim); }
+.stake-cell { color: var(--text); }
+.stake-zero { color: var(--text-dim); }
+.emission-cell { color: var(--accent); }
+.emission-zero { color: var(--text-dim); }
+.usd-cell { color: var(--text); }
+.usd-zero { color: var(--text-dim); }
+
+@media (max-width: 768px) {
+  .subnet-header { grid-template-columns: 1fr; }
+  .header-actions { justify-content: flex-start; }
+  .price-big { font-size: 22px; }
+  .miners-table { font-size: 11px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container-wide inner">
+    <a href="/" class="logo">Open<span>Tao</span>API</a>
+    <div class="nav-links">
+      <a href="/">Subnets</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/webhooks">Webhooks</a>
+      <a href="/docs">API Docs</a>
+    </div>
+  </div>
+</header>
+
+<div class="container-wide">
+  <div class="subnet-header" id="subnetHeader">
+    <div>
+      <div class="subnet-title">
+        <span id="subnetName">Loading…</span>
+        <span class="sn-num" id="subnetNum"></span>
+      </div>
+      <div class="price-row">
+        <span class="price-big" id="livePrice">—</span>
+        <span class="price-pct" id="pricePct" style="display:none"></span>
+      </div>
+      <div class="subnet-meta" id="subnetMeta"></div>
+    </div>
+    <div class="header-actions">
+      <button class="btn" id="btnEmbed">Copy embed</button>
+      <button class="btn btn-primary" id="btnAlert">Subscribe to alerts</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="chart">Chart</button>
+    <button class="tab" data-tab="miners">Miners</button>
+    <button class="tab" data-tab="validators">Validators</button>
+    <button class="tab" data-tab="embed">Embed</button>
+  </div>
+</div>
+
+<main class="container-wide">
+  <!-- Chart panel -->
+  <section id="panel-chart" class="panel">
+    <div class="interval-bar" id="intervalBar">
+      <button class="interval-btn" data-iv="5m">5m</button>
+      <button class="interval-btn" data-iv="15m">15m</button>
+      <button class="interval-btn active" data-iv="1h">1h</button>
+      <button class="interval-btn" data-iv="4h">4h</button>
+      <button class="interval-btn" data-iv="1d">1d</button>
+    </div>
+    <div class="chart-status">
+      <span id="backfillPill" class="pill" style="display:none">
+        <span class="pill-dot"></span>
+        <span id="backfillText">Loading history…</span>
+      </span>
+    </div>
+    <div id="chart"></div>
+    <div id="chartEmpty" class="chart-empty" style="display:none">
+      No candle data yet for this interval. Run the backfill script to populate history.
+    </div>
+  </section>
+
+  <!-- Miners / Validators panels share #tableContent -->
+  <section id="panel-miners" class="panel" style="display:none">
+    <div class="meta-strip" id="minersMeta"></div>
+    <div id="minersContent">
+      <div class="loading"><div class="spinner"></div><p>Loading miners…</p></div>
+    </div>
+  </section>
+  <section id="panel-validators" class="panel" style="display:none">
+    <div class="meta-strip" id="validatorsMeta"></div>
+    <div id="validatorsContent">
+      <div class="loading"><div class="spinner"></div><p>Loading validators…</p></div>
+    </div>
+  </section>
+
+  <!-- Embed panel -->
+  <section id="panel-embed" class="panel" style="display:none">
+    <div class="embed-box">
+      <div class="embed-code" id="embedCode"></div>
+      <button class="copy-btn" id="copyEmbed" title="Copy" data-copy="">⧉</button>
+    </div>
+    <div class="embed-preview" id="embedPreview"></div>
+    <p style="font-size:12px;color:var(--text-dim);margin-top:12px">
+      No auth, cached for 60s. Drop this snippet into any subnet landing page or README.
+    </p>
+  </section>
+</main>
+
+<!-- Alert subscription modal -->
+<div class="modal-overlay" id="alertModal" style="display:none">
+  <form class="modal" id="alertForm">
+    <button type="button" class="modal-close" id="alertClose">×</button>
+    <h2>Subscribe to alerts for SN <span id="alertNetuid"></span></h2>
+    <div class="form-row">
+      <label for="alertUrl">Webhook URL</label>
+      <input id="alertUrl" name="url" type="url" required placeholder="https://your.endpoint/alerts">
+    </div>
+    <div class="form-row">
+      <label for="alertMetric">Metric</label>
+      <select id="alertMetric" name="metric">
+        <option value="alpha_price_tao">alpha_price_tao</option>
+        <option value="tao_in">tao_in</option>
+        <option value="alpha_in">alpha_in</option>
+        <option value="market_cap_tao">market_cap_tao</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="alertDirection">Direction</label>
+      <select id="alertDirection" name="direction">
+        <option value="cross_up">cross_up</option>
+        <option value="cross_down">cross_down</option>
+        <option value="above">above</option>
+        <option value="below">below</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="alertThreshold">Threshold</label>
+      <input id="alertThreshold" name="threshold" type="number" step="any" required>
+    </div>
+    <div id="alertMsg"></div>
+    <div class="actions">
+      <button type="button" class="btn" id="alertCancel">Cancel</button>
+      <button type="submit" class="btn btn-primary">Create</button>
+    </div>
+  </form>
+</div>
+
+<footer>
+  <div class="container-wide">
+    <p>
+      <a href="/docs">API Docs</a> &middot;
+      <a href="https://github.com/ryanmercier/OpenTaoAPI">Source</a> &middot;
+      Powered by <a href="https://bittensor.com">Bittensor</a>
+    </p>
+  </div>
+</footer>
+
+<script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+<script>
+const API = '/api/v1';
+
+const pathParts = location.pathname.split('/');
+const netuid = parseInt(pathParts[2]);
+if (isNaN(netuid)) {
+  document.body.innerHTML = '<div class="error-msg">Invalid subnet URL. Use /subnet/{netuid}.</div>';
+  throw new Error('Invalid netuid');
+}
+
+// ---------- helpers ----------
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s ?? ''); return d.innerHTML; }
+function truncKey(s) { if (!s || s.length <= 12) return s || ''; return s.slice(0, 4) + '...' + s.slice(-3); }
+function fmt(n, d = 2) {
+  if (n === 0) return '0';
+  if (Math.abs(n) < 0.00001) return '0';
+  if (Math.abs(n) < 0.01) return n.toFixed(5);
+  return n.toFixed(d);
+}
+function fmtPct(n) {
+  const pct = n * 100;
+  if (pct === 0) return '0.00%';
+  if (pct < 0.01) return pct.toFixed(4) + '%';
+  return pct.toFixed(2) + '%';
+}
+function fmtUsd(n) {
+  if (n === 0) return '$0';
+  if (n < 0.01) return '$' + n.toFixed(4);
+  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return '$' + n.toFixed(2);
+}
+function fmtTao(n) {
+  if (n === 0) return 'τ0';
+  if (n >= 1000000) return 'τ' + (n / 1000000).toFixed(2) + 'M';
+  if (n >= 1000) return 'τ' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (n >= 1) return 'τ' + n.toFixed(2);
+  if (n >= 0.001) return 'τ' + n.toFixed(5);
+  return 'τ' + n.toFixed(8);
+}
+function fmtAlpha(n, sym) {
+  if (n === 0) return '0';
+  if (n >= 1000) return sym + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (n >= 1) return sym + n.toFixed(2);
+  return sym + n.toFixed(4);
+}
+function fmtStake(n) {
+  if (n === 0) return '—';
+  if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+  if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return fmt(n);
+}
+async function copyText(text) { try { await navigator.clipboard.writeText(text); } catch {} }
+
+function flashCell(el, direction) {
+  if (!el) return;
+  el.classList.remove('flash', 'flash-down');
+  void el.offsetWidth;
+  el.classList.add(direction === 'down' ? 'flash-down' : 'flash');
+}
+
+// ---------- subnet info header ----------
+let subnetInfo = null;
+
+async function loadHeader() {
+  try {
+    const res = await fetch(`${API}/subnet/${netuid}/info`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    subnetInfo = await res.json();
+    const name = subnetInfo.name || `Subnet ${netuid}`;
+    document.getElementById('subnetName').textContent = name;
+    document.getElementById('subnetNum').textContent = `SN ${netuid} · ${subnetInfo.symbol || ''}`;
+    document.title = `${name} — OpenTaoAPI`;
+    document.getElementById('livePrice').textContent =
+      netuid === 0 ? 'τ1' : fmtTao(subnetInfo.price);
+    document.getElementById('subnetMeta').innerHTML = `
+      <span>Market cap: ${fmtTao(subnetInfo.tao_in)}</span>
+      <span>TAO in pool: ${fmtTao(subnetInfo.tao_in)}</span>
+      <span>Alpha in pool: ${fmtAlpha(subnetInfo.alpha_in, subnetInfo.symbol || 'α')}</span>
+      <span>Block: ${subnetInfo.block}</span>
+    `;
+    document.getElementById('alertNetuid').textContent = netuid;
+    loadChangePct();
+  } catch (e) {
+    document.getElementById('subnetName').textContent = `Subnet ${netuid}`;
+  }
+}
+
+async function loadChangePct() {
+  try {
+    const res = await fetch(`${API}/subnet/${netuid}/candles?interval=1h&hours=24`);
+    if (!res.ok) return;
+    const candles = await res.json();
+    if (candles.length < 2) return;
+    const first = candles[0].o;
+    const last = candles[candles.length - 1].c;
+    if (!first) return;
+    const pct = ((last - first) / first) * 100;
+    const el = document.getElementById('pricePct');
+    el.style.display = '';
+    el.className = 'price-pct ' + (pct >= 0 ? 'up' : 'down');
+    el.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '% 24h';
+  } catch {}
+}
+
+// ---------- tabs ----------
+const panels = {
+  chart: document.getElementById('panel-chart'),
+  miners: document.getElementById('panel-miners'),
+  validators: document.getElementById('panel-validators'),
+  embed: document.getElementById('panel-embed'),
+};
+
+function setTab(name) {
+  Object.keys(panels).forEach(k => panels[k].style.display = k === name ? '' : 'none');
+  document.querySelectorAll('.tabs .tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === name);
+  });
+  const url = new URL(location.href);
+  url.searchParams.set('tab', name);
+  history.replaceState({}, '', url.toString());
+
+  if (name === 'chart') ensureChart();
+  if (name === 'miners') loadMinerTable('miners');
+  if (name === 'validators') loadMinerTable('validators');
+  if (name === 'embed') ensureEmbed();
+}
+
+document.querySelectorAll('.tabs .tab').forEach(t => {
+  t.addEventListener('click', () => setTab(t.dataset.tab));
+});
+
+// ---------- chart (lightweight-charts) ----------
+// Pull the full history we have at each interval. The API clamps `hours`
+// at 8760 (one year); candle counts then fall out of (hours*60)/interval,
+// so 5m/720h ≈ 8640 candles, 15m/2160h ≈ 8640, 1h/8760h = 8760, etc.
+const HOURS_FOR = { '5m': 720, '15m': 2160, '1h': 8760, '4h': 8760, '1d': 8760 };
+let chart = null;
+let candleSeries = null;
+let currentInterval = '1h';
+let currentCandles = [];
+
+function ensureChart() {
+  if (chart) {
+    window.dispatchEvent(new Event('resize'));
+    return;
+  }
+  chart = LightweightCharts.createChart(document.getElementById('chart'), {
+    width: document.getElementById('chart').clientWidth,
+    height: 420,
+    layout: { background: { color: '#0a0a0a' }, textColor: '#c8c8c8' },
+    grid: {
+      vertLines: { color: '#141414' },
+      horzLines: { color: '#141414' },
+    },
+    rightPriceScale: { borderColor: '#1e1e1e' },
+    timeScale: { borderColor: '#1e1e1e', timeVisible: true, secondsVisible: false },
+    crosshair: { mode: 1 },
+  });
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#00d4aa',
+    downColor: '#e84855',
+    borderVisible: false,
+    wickUpColor: '#00d4aa',
+    wickDownColor: '#e84855',
+    // Alpha prices live in the 0.00xx–0.1xx range, so the default 2-decimal
+    // formatter collapses every candle to the same value on hover.
+    priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
+  });
+  window.addEventListener('resize', () => {
+    chart.applyOptions({ width: document.getElementById('chart').clientWidth });
+  });
+  loadCandles();
+}
+
+function toChartTime(tSeconds) {
+  // lightweight-charts expects unix seconds for time
+  return typeof tSeconds === 'number' ? tSeconds : Math.floor(tSeconds / 1000);
+}
+
+// Silently kick off a 30-day chain-backfill if the current view is sparse.
+// One-shot per netuid per page load — the backend coalesces duplicate
+// requests anyway, but no point hammering it.
+let backfillTriggered = false;
+const SPARSE_THRESHOLD = 24;
+
+function setBackfillPill(text) {
+  const pill = document.getElementById('backfillPill');
+  const txt = document.getElementById('backfillText');
+  if (text) { txt.textContent = text; pill.style.display = ''; }
+  else { pill.style.display = 'none'; }
+}
+
+async function maybeTriggerBackfill(candleCount) {
+  if (backfillTriggered) return;
+  if (candleCount >= SPARSE_THRESHOLD) return;
+  backfillTriggered = true;
+  try {
+    const res = await fetch(
+      `${API}/subnet/${netuid}/backfill?days=30`,
+      { method: 'POST' },
+    );
+    if (!res.ok) return;
+    const job = await res.json();
+    if (job.state === 'done') { loadCandles(); return; }
+    setBackfillPill('Loading history…');
+    pollBackfill();
+  } catch { /* ignore — chart already shows whatever we have */ }
+}
+
+async function pollBackfill() {
+  for (let i = 0; i < 80; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const res = await fetch(`${API}/subnet/${netuid}/backfill`);
+      if (!res.ok) return;
+      const job = await res.json();
+      if (job.state === 'done') {
+        setBackfillPill(`Loaded +${job.inserted} bars`);
+        await loadCandles();
+        setTimeout(() => setBackfillPill(null), 3000);
+        return;
+      }
+      if (job.state === 'failed') {
+        setBackfillPill(null);
+        return;
+      }
+    } catch { /* keep polling */ }
+  }
+  setBackfillPill(null);
+}
+
+async function loadCandles() {
+  if (!candleSeries) return;
+  try {
+    const hours = HOURS_FOR[currentInterval];
+    const res = await fetch(`${API}/subnet/${netuid}/candles?interval=${currentInterval}&hours=${hours}`);
+    const empty = document.getElementById('chartEmpty');
+    if (res.status === 404) {
+      candleSeries.setData([]);
+      empty.style.display = '';
+      maybeTriggerBackfill(0);
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rows = await res.json();
+    currentCandles = rows.map(r => ({
+      time: toChartTime(r.t),
+      open: r.o, high: r.h, low: r.l, close: r.c,
+    }));
+    candleSeries.setData(currentCandles);
+    empty.style.display = currentCandles.length ? 'none' : '';
+    chart.timeScale().fitContent();
+    maybeTriggerBackfill(currentCandles.length);
+  } catch {
+    document.getElementById('chartEmpty').style.display = '';
+  }
+}
+
+document.querySelectorAll('.interval-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.interval-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentInterval = btn.dataset.iv;
+    loadCandles();
+  });
+});
+
+const INTERVAL_SECONDS = { '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 };
+function bucketStart(tsMs, intervalSec) {
+  return Math.floor(tsMs / 1000 / intervalSec) * intervalSec;
+}
+
+function updateChartLive(event) {
+  if (!candleSeries) return;
+  const eventTimeMs = event.timestamp ? new Date(event.timestamp).getTime() : Date.now();
+  const iv = INTERVAL_SECONDS[currentInterval];
+  const bucket = bucketStart(eventTimeMs, iv);
+  const price = event.alpha_price_tao;
+  if (price === undefined || price === null) return;
+  const last = currentCandles[currentCandles.length - 1];
+  if (last && last.time === bucket) {
+    last.high = Math.max(last.high, price);
+    last.low = Math.min(last.low, price);
+    last.close = price;
+  } else {
+    currentCandles.push({ time: bucket, open: price, high: price, low: price, close: price });
+  }
+  candleSeries.update(currentCandles[currentCandles.length - 1]);
+}
+
+// ---------- miners / validators ----------
+const tableState = {
+  miners: { sort: 'uid', order: 'asc' },
+  validators: { sort: 'uid', order: 'asc' },
+};
+
+function keyCell(key, isColdkey) {
+  const safe = esc(key);
+  const trunc = esc(truncKey(key));
+  const link = isColdkey
+    ? `<a href="/portfolio/${safe}" title="${safe}">${trunc}</a>`
+    : `<span title="${safe}">${trunc}</span>`;
+  return `<td class="key-cell">${link}<button class="copy-btn" data-copy="${safe}" title="Copy">⧉</button></td>`;
+}
+
+function bindSort(panelContentId, kind) {
+  document.querySelectorAll(`#${panelContentId} .miners-table th[data-col]`).forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      const st = tableState[kind];
+      if (st.sort === col) st.order = st.order === 'asc' ? 'desc' : 'asc';
+      else { st.sort = col; st.order = col === 'uid' ? 'asc' : 'desc'; }
+      loadMinerTable(kind);
+    });
+  });
+  document.querySelectorAll(`#${panelContentId} .copy-btn[data-copy]`).forEach(btn => {
+    btn.addEventListener('click', () => copyText(btn.dataset.copy));
+  });
+}
+
+function sortMark(kind, col) {
+  const st = tableState[kind];
+  return st.sort === col ? ' class="sorted"' : '';
+}
+function sortArrow(kind, col) {
+  const st = tableState[kind];
+  return st.sort === col ? `<span class="arrow">${st.order === 'asc' ? '▲' : '▼'}</span>` : '';
+}
+
+function renderMiners(data) {
+  const sym = data.symbol || 'α';
+  const container = document.getElementById('minersContent');
+  container.innerHTML = `
+    <div class="miners-wrap">
+      <table class="miners-table">
+        <thead>
+          <tr>
+            <th style="cursor:default">#</th>
+            <th${sortMark('miners','uid')} data-col="uid">UID${sortArrow('miners','uid')}</th>
+            <th style="cursor:default">Hotkey</th>
+            <th style="cursor:default">Coldkey</th>
+            <th style="cursor:default">IP</th>
+            <th${sortMark('miners','incentive')} data-col="incentive">Incentive${sortArrow('miners','incentive')}</th>
+            <th${sortMark('miners','stake')} data-col="stake">${esc(data.subnet_name || 'Alpha')} Stake${sortArrow('miners','stake')}</th>
+            <th${sortMark('miners','daily_alpha')} data-col="daily_alpha">${sym}/Day${sortArrow('miners','daily_alpha')}</th>
+            <th${sortMark('miners','daily_usd')} data-col="daily_usd">$/Day${sortArrow('miners','daily_usd')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.miners.map(m => `
+            <tr>
+              <td class="rank-cell">${m.rank}</td>
+              <td class="uid-cell">${m.uid}</td>
+              ${keyCell(m.hotkey, false)}
+              ${keyCell(m.coldkey, true)}
+              <td class="ip-cell">${esc(m.axon) || '—'}</td>
+              <td class="${m.incentive > 0 ? 'incentive-cell' : 'incentive-zero'}">${fmtPct(m.incentive)}</td>
+              <td class="${m.stake > 0 ? 'stake-cell' : 'stake-zero'}">${fmtStake(m.stake)}</td>
+              <td class="${m.daily_alpha > 0 ? 'emission-cell' : 'emission-zero'}">${fmtAlpha(m.daily_alpha, sym)}</td>
+              <td class="${m.daily_usd > 0 ? 'usd-cell' : 'usd-zero'}">${fmtUsd(m.daily_usd)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+  bindSort('minersContent', 'miners');
+}
+
+function renderValidators(data) {
+  const sym = data.symbol || 'α';
+  const container = document.getElementById('validatorsContent');
+  container.innerHTML = `
+    <div class="miners-wrap">
+      <table class="miners-table">
+        <thead>
+          <tr>
+            <th style="cursor:default">#</th>
+            <th${sortMark('validators','uid')} data-col="uid">UID${sortArrow('validators','uid')}</th>
+            <th style="cursor:default">Hotkey</th>
+            <th style="cursor:default">Coldkey</th>
+            <th${sortMark('validators','stake')} data-col="stake">${esc(data.subnet_name || 'Alpha')} Stake${sortArrow('validators','stake')}</th>
+            <th style="cursor:default">TAO Stake</th>
+            <th style="cursor:default">Total Stake</th>
+            <th${sortMark('validators','vtrust')} data-col="vtrust">VTrust${sortArrow('validators','vtrust')}</th>
+            <th${sortMark('validators','dividends')} data-col="dividends">Dividends${sortArrow('validators','dividends')}</th>
+            <th${sortMark('validators','dominance')} data-col="dominance">Dominance${sortArrow('validators','dominance')}</th>
+            <th${sortMark('validators','daily_alpha')} data-col="daily_alpha">${sym}/Day${sortArrow('validators','daily_alpha')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.validators.map(v => `
+            <tr>
+              <td class="rank-cell">${v.rank}</td>
+              <td class="uid-cell">${v.uid}</td>
+              ${keyCell(v.hotkey, false)}
+              ${keyCell(v.coldkey, true)}
+              <td class="${v.stake > 0 ? 'stake-cell' : 'stake-zero'}">${fmtAlpha(v.stake, sym)}</td>
+              <td class="${v.tao_stake > 0 ? 'stake-cell' : 'stake-zero'}">${fmtTao(v.tao_stake)}</td>
+              <td class="stake-cell">${fmtTao(v.total_stake_tao)}</td>
+              <td class="${v.vtrust > 0 ? 'incentive-cell' : 'incentive-zero'}">${v.vtrust.toFixed(5)}</td>
+              <td class="${v.dividends > 0 ? 'incentive-cell' : 'incentive-zero'}">${v.dividends.toFixed(5)}</td>
+              <td class="${v.dominance > 0 ? 'incentive-cell' : 'incentive-zero'}">${v.dominance > 0 ? '+' + v.dominance.toFixed(2) + '%' : '0%'}</td>
+              <td class="${v.daily_alpha > 0 ? 'emission-cell' : 'emission-zero'}">${fmtAlpha(v.daily_alpha, sym)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+  bindSort('validatorsContent', 'validators');
+}
+
+async function loadMinerTable(kind) {
+  const st = tableState[kind];
+  const url = `${API}/subnet/${netuid}/${kind}?sort=${st.sort}&order=${st.order}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const total = kind === 'miners' ? data.total_miners : data.total_validators;
+    document.getElementById(kind === 'miners' ? 'minersMeta' : 'validatorsMeta').innerHTML = `
+      <span>${kind === 'miners' ? 'Miners' : 'Validators'}: ${total}</span>
+      <span>Rate: τ${fmt(data.alpha_to_tao_rate, 5)}</span>
+      <span>TAO: ${fmtUsd(data.tao_price_usd)}</span>
+    `;
+    if (kind === 'miners') renderMiners(data);
+    else renderValidators(data);
+  } catch (e) {
+    document.getElementById(kind === 'miners' ? 'minersContent' : 'validatorsContent').innerHTML =
+      `<div class="error-msg">${esc(e.message)}</div>`;
+  }
+}
+
+// ---------- embed tab ----------
+function ensureEmbed() {
+  const origin = location.origin;
+  const url = `${origin}/embed/subnet/${netuid}/sparkline?hours=168&w=240&h=60`;
+  const snippet = `<img src="${url}" alt="SN${netuid} sparkline" />`;
+  document.getElementById('embedCode').textContent = snippet;
+  document.getElementById('copyEmbed').dataset.copy = snippet;
+  document.getElementById('embedPreview').innerHTML = snippet;
+}
+document.getElementById('copyEmbed').addEventListener('click', e => {
+  copyText(e.currentTarget.dataset.copy);
+  e.currentTarget.classList.add('copied');
+  setTimeout(() => e.currentTarget.classList.remove('copied'), 1200);
+});
+document.getElementById('btnEmbed').addEventListener('click', () => setTab('embed'));
+
+// ---------- alerts modal ----------
+const modal = document.getElementById('alertModal');
+function openModal() { modal.style.display = 'flex'; document.getElementById('alertMsg').innerHTML = ''; }
+function closeModal() { modal.style.display = 'none'; }
+document.getElementById('btnAlert').addEventListener('click', openModal);
+document.getElementById('alertClose').addEventListener('click', closeModal);
+document.getElementById('alertCancel').addEventListener('click', closeModal);
+modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && modal.style.display !== 'none') closeModal(); });
+
+document.getElementById('alertForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const payload = {
+    url: document.getElementById('alertUrl').value.trim(),
+    metric: document.getElementById('alertMetric').value,
+    direction: document.getElementById('alertDirection').value,
+    threshold: parseFloat(document.getElementById('alertThreshold').value),
+    netuid,
+  };
+  const msg = document.getElementById('alertMsg');
+  try {
+    const res = await fetch(`${API}/webhooks/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+    msg.innerHTML = `<span class="msg-ok">Subscription #${body.id} created.</span>`;
+    setTimeout(closeModal, 1500);
+  } catch (err) {
+    msg.innerHTML = `<span class="msg-err">${esc(err.message)}</span>`;
+  }
+});
+
+// ---------- SSE live price + chart ----------
+let lastEventAt = Date.now();
+let es = null;
+
+function connectSSE() {
+  if (es) es.close();
+  es = new EventSource(`${API}/stream?netuid=${netuid}`);
+  es.onmessage = (ev) => {
+    lastEventAt = Date.now();
+    let event;
+    try { event = JSON.parse(ev.data); } catch { return; }
+    const priceEl = document.getElementById('livePrice');
+    const prev = subnetInfo ? subnetInfo.price : event.alpha_price_tao;
+    const next = event.alpha_price_tao ?? prev;
+    const dir = next >= prev ? 'up' : 'down';
+    priceEl.textContent = netuid === 0 ? 'τ1' : fmtTao(next);
+    flashCell(priceEl, dir);
+    if (subnetInfo) subnetInfo.price = next;
+    updateChartLive(event);
+  };
+  es.onerror = () => { /* auto-reconnects */ };
+}
+
+setInterval(() => {
+  if (Date.now() - lastEventAt > 90_000) {
+    connectSSE();
+    loadHeader();
+    lastEventAt = Date.now();
+  }
+}, 30_000);
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && Date.now() - lastEventAt > 60_000) {
+    connectSSE();
+    loadHeader();
+    lastEventAt = Date.now();
+  }
+});
+
+// ---------- init ----------
+const initialTab = new URLSearchParams(location.search).get('tab');
+const validTab = ['chart', 'miners', 'validators', 'embed'].includes(initialTab) ? initialTab : 'chart';
+loadHeader().then(() => {
+  setTab(validTab);
+  connectSSE();
+});
+</script>
+
+</body>
+</html>

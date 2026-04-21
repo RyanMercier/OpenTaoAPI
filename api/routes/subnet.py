@@ -353,12 +353,15 @@ async def get_subnet_validators(
     }
 
 
-@router.get("/subnets")
+@router.get("/subnets", summary="List all subnets with prices and pool reserves")
 async def get_all_subnets(
     sort: str = Query("market_cap", pattern="^(netuid|name|price|market_cap|emission|supply|volume)$"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
-    """All subnets overview, ranked by market cap by default."""
+    """All subnets ranked by market cap by default. Each row carries the
+    pool reserves (`tao_in`, `alpha_in`, `alpha_out`) alongside derived
+    metrics so clients can simulate swaps without an extra round trip per
+    subnet."""
     try:
         all_sn, tao_price = await asyncio.gather(
             _chain_client.get_all_subnets_info(),
@@ -409,6 +412,11 @@ async def get_all_subnets(
             "volume_usd": volume_tao * tao_price,
             "tempo": sn.tempo,
             "is_dynamic": sn.is_dynamic if hasattr(sn, 'is_dynamic') else True,
+            # Pool reserves let clients simulate swaps without a
+            # per-subnet round trip to /subnet/{netuid}/info.
+            "tao_in": tao_in,
+            "alpha_in": alpha_in,
+            "alpha_out": alpha_out,
         })
 
     reverse = order == "desc"

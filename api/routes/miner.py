@@ -78,8 +78,9 @@ async def get_miner(coldkey: str, netuid: int):
             )
             for n, d in zip(other_netuids, other_dyns):
                 dyn_by_netuid[n] = d
-        except Exception:
-            pass
+        except Exception as e:
+            # Fall back to the requested subnet's rate for cross-subnet math.
+            logger.warning("Cross-subnet dyn fetch partial failure: %s", e)
 
     # Compute total staked TAO across all subnets
     total_staked_tao = 0.0
