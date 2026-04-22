@@ -6,6 +6,9 @@ The project gives you everything a hosted Bittensor analytics provider does (sub
 
 **Web UI** at `http://localhost:8000` · **Swagger docs** at `http://localhost:8000/docs`
 
+## Live Demo
+https://opentao.rpmsystems.io/
+
 ## Features
 
 - REST API with full subnet, neuron, emission, and portfolio data
