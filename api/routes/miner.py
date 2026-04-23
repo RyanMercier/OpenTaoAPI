@@ -31,11 +31,27 @@ def init_miner_router(chain_client: ChainClient, price_client: PriceClient):
 
 
 def _ss58_to_hex(ss58: str) -> str:
+    """Return the 0x-prefixed hex pubkey for an SS58 address, or an empty
+    string if no SS58 decoder is importable. Bittensor 9.x historically
+    shipped scalecodec transitively, but newer releases have pulled in
+    alternative packages that conflict with explicit scalecodec pins, so
+    we probe a few well-known sources in order."""
     try:
         from scalecodec.utils.ss58 import ss58_decode
         return "0x" + ss58_decode(ss58)
     except Exception:
-        return ""
+        pass
+    try:
+        from substrateinterface.utils.ss58 import ss58_decode
+        return "0x" + ss58_decode(ss58)
+    except Exception:
+        pass
+    try:
+        from bittensor_wallet.keypair import Keypair
+        return "0x" + Keypair(ss58_address=ss58).public_key.hex()
+    except Exception:
+        pass
+    return ""
 
 
 def _get_axon(meta, uid: int) -> str:
