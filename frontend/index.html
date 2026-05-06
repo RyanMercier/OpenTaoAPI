@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenTaoAPI</title>
 <link rel="stylesheet" href="/static/common.css">
+<script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 <style>
 
 .search-form {
@@ -60,6 +61,55 @@
 
 /* Portfolio */
 .portfolio { padding: 32px 0 64px; }
+
+/* Portfolio history chart */
+.portfolio-chart-card {
+  margin: 0 0 28px;
+  padding: 16px 16px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+.portfolio-chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.portfolio-chart-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.portfolio-chart-ranges { display: flex; gap: 4px; }
+.portfolio-chart-ranges button {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.portfolio-chart-ranges button:hover { color: var(--text); }
+.portfolio-chart-ranges button.active {
+  color: #001914;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.portfolio-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-dim);
+  font-size: 12px;
+  gap: 8px;
+}
+.portfolio-chart-empty .btn { font-size: 11px; }
+#portfolioChart { width: 100%; height: 200px; }
 
 .coldkey-label {
   font-family: var(--mono);
@@ -199,6 +249,7 @@
     <div class="nav-links">
       <a href="/">Subnets</a>
       <a href="/portfolio" class="active">Portfolio</a>
+      <a href="/wallets">Wallets</a>
       <a href="/webhooks">Webhooks</a>
       <a href="/docs">API Docs</a>
     </div>
@@ -325,6 +376,18 @@ function render(data) {
         <span>TAO/USD ${fmtUsd(d.tao_price_usd)}</span>
       </div>
 
+      <div class="portfolio-chart-card">
+        <div class="portfolio-chart-head">
+          <span class="portfolio-chart-title">Portfolio value (TAO)</span>
+          <div class="portfolio-chart-ranges">
+            <button data-hours="24">24h</button>
+            <button data-hours="168" class="active">7d</button>
+            <button data-hours="720">30d</button>
+          </div>
+        </div>
+        <div id="portfolioChart"></div>
+      </div>
+
       <div class="tokens-header">Tokens ${d.subnet_count + 1}</div>
       <table class="tokens-table">
         <thead>
@@ -369,6 +432,119 @@ function render(data) {
       render(currentData);
     });
   });
+
+  // Bind range buttons + load initial chart
+  content.querySelectorAll('.portfolio-chart-ranges button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      content.querySelectorAll('.portfolio-chart-ranges button').forEach(b =>
+        b.classList.toggle('active', b === btn));
+      loadHistoryChart(d.coldkey, parseInt(btn.dataset.hours, 10));
+    });
+  });
+  loadHistoryChart(d.coldkey, 168);
+}
+
+let portfolioChart = null;
+let portfolioSeries = null;
+
+function ensurePortfolioChart(container) {
+  if (portfolioChart && portfolioChart._container === container) return;
+  if (portfolioChart) {
+    try { portfolioChart.remove(); } catch {}
+    portfolioChart = null;
+    portfolioSeries = null;
+  }
+  portfolioChart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: 200,
+    layout: { background: { color: '#111' }, textColor: '#c8c8c8' },
+    grid: {
+      vertLines: { color: '#1a1a1a' },
+      horzLines: { color: '#1a1a1a' },
+    },
+    rightPriceScale: { borderColor: '#1e1e1e' },
+    timeScale: { borderColor: '#1e1e1e', timeVisible: true, secondsVisible: false },
+    crosshair: { mode: 1 },
+    handleScroll: false,
+    handleScale: false,
+  });
+  portfolioChart._container = container;
+  portfolioSeries = portfolioChart.addAreaSeries({
+    lineColor: '#00d4aa',
+    topColor: 'rgba(0, 212, 170, 0.35)',
+    bottomColor: 'rgba(0, 212, 170, 0.02)',
+    priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
+  });
+  window.addEventListener('resize', () => {
+    if (portfolioChart && portfolioChart._container) {
+      portfolioChart.applyOptions({
+        width: portfolioChart._container.clientWidth,
+      });
+    }
+  });
+}
+
+async function loadHistoryChart(coldkey, hours) {
+  const container = document.getElementById('portfolioChart');
+  if (!container) return;
+  try {
+    const res = await fetch(
+      `${API}/portfolio/${encodeURIComponent(coldkey)}/history?hours=${hours}`
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.points || data.points.length === 0) {
+      renderEmptyChart(container, coldkey);
+      return;
+    }
+    ensurePortfolioChart(container);
+    const series = data.points
+      .map(p => ({
+        time: Math.floor(new Date(p.timestamp).getTime() / 1000),
+        value: p.total_balance_tao || 0,
+      }))
+      .filter(p => p.time && p.value >= 0);
+    portfolioSeries.setData(series);
+    portfolioChart.timeScale().fitContent();
+  } catch (e) {
+    renderEmptyChart(container, coldkey, e.message);
+  }
+}
+
+function renderEmptyChart(container, coldkey, errMsg) {
+  if (portfolioChart) {
+    try { portfolioChart.remove(); } catch {}
+    portfolioChart = null;
+    portfolioSeries = null;
+  }
+  container.innerHTML = `
+    <div class="portfolio-chart-empty">
+      <div>${errMsg ? esc(errMsg) : 'No history yet for this wallet.'}</div>
+      <button class="btn btn-sm" id="trackBtn">Track this wallet</button>
+    </div>
+  `;
+  const btn = document.getElementById('trackBtn');
+  if (btn) btn.addEventListener('click', () => trackWallet(coldkey, btn));
+}
+
+async function trackWallet(coldkey, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Tracking...';
+  try {
+    const res = await fetch(`${API}/wallets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ coldkey }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    btn.textContent = 'Tracking. Snapshots will appear within 5 minutes.';
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = `Failed: ${e.message}`;
+  }
 }
 
 async function lookup(coldkey) {

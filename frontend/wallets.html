@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallets · OpenTaoAPI</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 32px 0 8px;
+  gap: 16px;
+}
+.page-head h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-bright);
+  letter-spacing: -0.3px;
+}
+.page-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 24px;
+}
+.add-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  margin-bottom: 24px;
+}
+.add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.add-form input[type="text"] {
+  flex: 1 1 280px;
+  padding: 7px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-bright);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+}
+.add-form input[type="text"]:focus { border-color: #333; }
+.add-form input[type="number"] {
+  width: 120px;
+  padding: 7px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.add-msg { font-size: 12px; margin-top: 8px; }
+.add-msg.err { color: var(--red); }
+.add-msg.ok  { color: var(--accent); }
+
+.wallets-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.wallets-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.wallets-table th.r { text-align: right; }
+.wallets-table td {
+  padding: 14px 8px;
+  border-bottom: 1px solid #141414;
+  font-size: 13px;
+  color: var(--text);
+  font-family: var(--mono);
+}
+.wallets-table td.r { text-align: right; }
+.wallets-table tr:hover td { background: #0d0d0d; }
+.wallet-link {
+  color: var(--text-bright);
+  text-decoration: none;
+}
+.wallet-link:hover { color: var(--accent); }
+.wallet-label { font-family: var(--sans); color: var(--text-dim); font-size: 12px; }
+.coldkey-trunc { font-size: 12px; }
+.spark-cell { width: 120px; padding-right: 0 !important; }
+.spark-cell svg { display: block; margin-left: auto; }
+.no-data { color: var(--text-dim); }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.empty {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container-wide inner">
+    <a href="/" class="logo">Open<span>Tao</span>API</a>
+    <div class="nav-links">
+      <a href="/">Subnets</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/wallets" class="active">Wallets</a>
+      <a href="/webhooks">Webhooks</a>
+      <a href="/docs">API Docs</a>
+    </div>
+  </div>
+</header>
+
+<div class="container-wide">
+  <div class="page-head"><h1>Tracked wallets</h1></div>
+  <div class="page-sub">
+    The poller refreshes each tracked coldkey on its own interval (default 5 minutes) and
+    appends a portfolio snapshot. Click a wallet for the full chart.
+  </div>
+
+  <div class="add-card">
+    <form class="add-form" id="addForm" autocomplete="off">
+      <input type="text" id="coldkeyInput" placeholder="SS58 coldkey (e.g. 5EhrSbe...)" spellcheck="false" required>
+      <input type="text" id="labelInput" placeholder="Label (optional)" maxlength="80">
+      <input type="number" id="intervalInput" min="60" max="86400" value="300" title="Poll interval seconds">
+      <button type="submit" class="btn btn-primary">Track wallet</button>
+    </form>
+    <div id="addMsg" class="add-msg"></div>
+  </div>
+
+  <div id="walletsContainer">
+    <div class="loading"><div class="spinner"></div><p>Loading watchlist...</p></div>
+  </div>
+</div>
+
+<footer>
+  <div class="container-wide">
+    <p>
+      <a href="/">Subnets</a> &middot;
+      <a href="/portfolio">Portfolio</a> &middot;
+      <a href="/webhooks">Webhooks</a> &middot;
+      <a href="/docs">API Docs</a> &middot;
+      <a href="https://github.com/ryanmercier/OpenTaoAPI">Source</a>
+    </p>
+  </div>
+</footer>
+
+<script>
+const API = '/api/v1';
+const $ = s => document.querySelector(s);
+
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s ?? ''); return d.innerHTML; }
+function truncCk(s) { if (!s || s.length <= 16) return s || ''; return s.slice(0, 6) + '...' + s.slice(-4); }
+function fmtTao(n) {
+  if (n == null) return '-';
+  if (n === 0) return 'τ0';
+  if (n >= 1000000) return 'τ' + (n / 1000000).toFixed(2) + 'M';
+  if (n >= 1000) return 'τ' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  if (n >= 1) return 'τ' + n.toFixed(2);
+  return 'τ' + n.toFixed(4);
+}
+function fmtUsd(n) {
+  if (n == null) return '-';
+  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  if (n >= 1) return '$' + n.toFixed(2);
+  return '$' + n.toFixed(4);
+}
+function fmtAge(iso) {
+  if (!iso) return 'never';
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+
+// Tiny client-side sparkline. Returns an SVG string built from a list of
+// numeric values. Matches the visual weight of the embed sparkline but
+// avoids a server roundtrip per wallet.
+function sparkSvg(values, w = 110, h = 26) {
+  if (!values || values.length < 2) {
+    return `<svg width="${w}" height="${h}"></svg>`;
+  }
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const step = w / (values.length - 1);
+  const points = values.map((v, i) => {
+    const x = i * step;
+    const y = h - ((v - min) / range) * (h - 4) - 2;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(' ');
+  const last = values[values.length - 1];
+  const first = values[0];
+  const stroke = last >= first ? '#00d4aa' : '#e84855';
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
+    <polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+async function loadHistorySeries(coldkey, hours = 168) {
+  try {
+    const res = await fetch(`${API}/portfolio/${encodeURIComponent(coldkey)}/history?hours=${hours}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.points || []).map(p => p.total_balance_tao || 0);
+  } catch {
+    return [];
+  }
+}
+
+async function renderWallets() {
+  const container = $('#walletsContainer');
+  let wallets;
+  try {
+    const res = await fetch(`${API}/wallets`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    wallets = await res.json();
+  } catch (e) {
+    container.innerHTML = `<div class="error-msg">Failed to load: ${esc(e.message)}</div>`;
+    return;
+  }
+
+  if (!wallets.length) {
+    container.innerHTML = `
+      <div class="empty">
+        <p>No wallets tracked yet.</p>
+        <p style="margin-top:8px">Add a coldkey above to start collecting portfolio history.</p>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="wallets-table">
+      <thead>
+        <tr>
+          <th>Wallet</th>
+          <th class="r">Total (TAO)</th>
+          <th class="r">Total (USD)</th>
+          <th class="r">Subnets</th>
+          <th class="r">Last poll</th>
+          <th class="r">7d</th>
+          <th class="r"></th>
+        </tr>
+      </thead>
+      <tbody id="walletsBody"></tbody>
+    </table>
+  `;
+
+  const tbody = $('#walletsBody');
+  for (const w of wallets) {
+    const tr = document.createElement('tr');
+    const labelHtml = w.label
+      ? `<div class="wallet-label">${esc(w.label)}</div>`
+      : '';
+    tr.innerHTML = `
+      <td>
+        <a class="wallet-link" href="/portfolio/${encodeURIComponent(w.coldkey_ss58)}">
+          <div>${esc(truncCk(w.coldkey_ss58))}</div>
+        </a>
+        ${labelHtml}
+        <div class="coldkey-trunc"><span class="${w.active ? '' : 'no-data'}">${w.active ? 'Active' : 'Paused'}</span></div>
+      </td>
+      <td class="r">${fmtTao(w.total_balance_tao)}</td>
+      <td class="r">${fmtUsd(w.total_balance_usd)}</td>
+      <td class="r">${w.subnet_count == null ? '-' : w.subnet_count}</td>
+      <td class="r">${esc(fmtAge(w.last_polled_at))}</td>
+      <td class="r spark-cell" data-spark="${esc(w.coldkey_ss58)}">
+        <svg width="110" height="26"></svg>
+      </td>
+      <td class="r">
+        <div class="row-actions">
+          <button class="btn btn-sm btn-danger" data-rm="${esc(w.coldkey_ss58)}">Remove</button>
+        </div>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  tbody.querySelectorAll('button[data-rm]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Stop tracking this wallet? History is preserved.')) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${API}/wallets/${encodeURIComponent(btn.dataset.rm)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        renderWallets();
+      } catch (e) {
+        btn.disabled = false;
+        alert('Failed: ' + e.message);
+      }
+    });
+  });
+
+  // Lazy-load each sparkline so the table paints first.
+  for (const cell of tbody.querySelectorAll('.spark-cell')) {
+    loadHistorySeries(cell.dataset.spark, 168).then(vals => {
+      cell.innerHTML = sparkSvg(vals, 110, 26);
+    });
+  }
+}
+
+$('#addForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = $('#addMsg');
+  msg.className = 'add-msg';
+  msg.textContent = '';
+  const coldkey = $('#coldkeyInput').value.trim();
+  const label = $('#labelInput').value.trim() || null;
+  const interval = parseInt($('#intervalInput').value, 10) || 300;
+  if (!coldkey) return;
+  try {
+    const res = await fetch(`${API}/wallets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ coldkey, label, poll_interval_seconds: interval }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    msg.className = 'add-msg ok';
+    msg.textContent = 'Tracking. First snapshot will appear within the poll interval.';
+    $('#coldkeyInput').value = '';
+    $('#labelInput').value = '';
+    renderWallets();
+  } catch (err) {
+    msg.className = 'add-msg err';
+    msg.textContent = err.message;
+  }
+});
+
+renderWallets();
+</script>
+
+</body>
+</html>

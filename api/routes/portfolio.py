@@ -1,13 +1,15 @@
-import asyncio
 import logging
-from collections import defaultdict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
-from api.models.schemas import PortfolioResponse, PortfolioSubnet
-from api.services.calculations import calculate_emission
+from api.models.schemas import (
+    PortfolioHistoryPoint,
+    PortfolioHistoryResponse,
+    PortfolioResponse,
+)
 from api.services.chain_client import ChainClient
-from api.services.metagraph_compat import meta_get, meta_get_uid
+from api.services.database import Database
+from api.services.portfolio_service import compute_portfolio
 from api.services.price_client import PriceClient
 
 logger = logging.getLogger(__name__)
@@ -16,192 +18,57 @@ router = APIRouter(tags=["portfolio"])
 
 _chain_client: ChainClient | None = None
 _price_client: PriceClient | None = None
+_db: Database | None = None
 
 
-def init_portfolio_router(chain_client: ChainClient, price_client: PriceClient):
-    global _chain_client, _price_client
+def init_portfolio_router(
+    chain_client: ChainClient,
+    price_client: PriceClient,
+    db: Database,
+):
+    global _chain_client, _price_client, _db
     _chain_client = chain_client
     _price_client = price_client
+    _db = db
 
 
 @router.get("/portfolio/{coldkey}", response_model=PortfolioResponse)
 async def get_portfolio(coldkey: str):
-    """Full cross-subnet portfolio for a coldkey."""
+    """Full cross-subnet portfolio for a coldkey, computed live."""
     try:
-        balance, stakes, tao_price = await asyncio.gather(
-            _chain_client.get_balance(coldkey),
-            _chain_client.get_stake_info_for_coldkey(coldkey),
-            _price_client.get_tao_price(),
+        portfolio, _ = await compute_portfolio(_chain_client, _price_client, coldkey)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return portfolio
+
+
+@router.get(
+    "/portfolio/{coldkey}/history",
+    response_model=PortfolioHistoryResponse,
+    summary="Portfolio value time series for a tracked wallet",
+)
+async def get_portfolio_history(
+    coldkey: str,
+    hours: int = Query(168, ge=1, le=8760),
+    limit: int = Query(500, ge=1, le=5000),
+):
+    """Time series of total portfolio value for a coldkey. Only populated
+    for wallets that have been added to the watchlist via
+    ``POST /wallets``; otherwise the array is empty."""
+    if not _db:
+        raise HTTPException(status_code=503, detail="Historical data not available")
+    rows = await _db.get_wallet_history(coldkey, hours=hours, limit=limit)
+    points = [
+        PortfolioHistoryPoint(
+            block=r["block"],
+            timestamp=r["timestamp"],
+            total_balance_tao=r["total_balance_tao"],
+            free_balance_tao=r["free_balance_tao"],
+            total_staked_tao=r["total_staked_tao"],
+            tao_price_usd=r["tao_price_usd"],
+            total_balance_usd=r["total_balance_usd"],
+            subnet_count=r["subnet_count"],
         )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Chain query failed: {e}")
-
-    free_tao = float(balance.tao) if hasattr(balance, 'tao') else float(balance)
-
-    if not stakes:
-        return PortfolioResponse(
-            coldkey=coldkey,
-            total_balance_tao=free_tao,
-            free_balance_tao=free_tao,
-            total_staked_tao=0.0,
-            tao_price_usd=tao_price,
-            total_balance_usd=free_tao * tao_price,
-            subnet_count=0,
-            subnets=[],
-        )
-
-    # Group stakes by netuid
-    by_netuid = defaultdict(list)
-    for s in stakes:
-        by_netuid[s.netuid].append(s)
-
-    netuids = list(by_netuid.keys())
-
-    registered_netuids = [
-        n for n in netuids if any(
-            getattr(s, 'is_registered', True) for s in by_netuid[n]
-        )
+        for r in rows
     ]
-
-    # return_exceptions=True means gather never raises; we unpack per-result
-    # below and skip failing subnets rather than 502'ing the whole response.
-    dyn_tasks = [_chain_client.get_dynamic_info(n) for n in netuids]
-    meta_tasks = [_chain_client.get_metagraph(n) for n in registered_netuids]
-    all_results = await asyncio.gather(*dyn_tasks, *meta_tasks, return_exceptions=True)
-
-    dyn_results = all_results[:len(netuids)]
-    meta_results = all_results[len(netuids):]
-
-    dyn_by_netuid = {}
-    for n, r in zip(netuids, dyn_results):
-        if isinstance(r, Exception):
-            logger.warning("Portfolio: gather dropped SN%d (%s); retrying sequentially", n, r)
-        else:
-            dyn_by_netuid[n] = r
-
-    # Retry any subnet the batched gather failed on. A single hung RPC in a
-    # parallel gather can poison an otherwise good payload, and the portfolio
-    # response absolutely cannot silently omit real stake positions.
-    missing = [n for n in netuids if n not in dyn_by_netuid]
-    for n in missing:
-        try:
-            dyn_by_netuid[n] = await _chain_client.get_dynamic_info(n)
-        except Exception as e:
-            logger.error("Portfolio: dynamic_info unavailable for SN%d: %s", n, e)
-
-    metas = {}
-    for n, r in zip(registered_netuids, meta_results):
-        if not isinstance(r, Exception):
-            metas[n] = r
-
-    total_staked_tao = 0.0
-    subnets = []
-
-    for n in sorted(netuids):
-        subnet_stakes = by_netuid[n]
-        total_alpha = sum(float(s.stake) for s in subnet_stakes)
-        hotkey_count = len(subnet_stakes)
-
-        dyn = dyn_by_netuid.get(n)
-        if dyn is None:
-            # Emit a degraded row so the UI and totals stay honest. Without
-            # pool data we can't price alpha, but we can still show the
-            # alpha amount and flag it with price_tao=0.
-            logger.warning(
-                "Portfolio: emitting SN%d with unknown price (%.4f alpha unpriced)",
-                n, total_alpha,
-            )
-            subnets.append(PortfolioSubnet(
-                netuid=n,
-                name=f"SN {n}",
-                symbol="",
-                balance_alpha=total_alpha,
-                balance_tao=0.0,
-                price_tao=0.0,
-                value_usd=0.0,
-                hotkey_count=hotkey_count,
-                daily_yield_tao=0.0,
-                daily_yield_usd=0.0,
-            ))
-            continue
-
-        tao_in = float(dyn.tao_in)
-        alpha_in = float(dyn.alpha_in)
-        price = tao_in / alpha_in if alpha_in > 0 else 1.0
-
-        name = ""
-        symbol = ""
-        if hasattr(dyn, 'subnet_name'):
-            name = dyn.subnet_name or ""
-        if not name and hasattr(dyn, 'name'):
-            name = dyn.name or ""
-        if hasattr(dyn, 'symbol'):
-            symbol = dyn.symbol or ""
-
-        if n == 0:
-            name = name or "Staked TAO"
-            symbol = symbol or "τ"
-            price = 1.0
-
-        total_tao = total_alpha * price if n != 0 else total_alpha
-        total_staked_tao += total_tao
-
-        # Compute daily yield
-        daily_yield_tao = 0.0
-        meta = metas.get(n)
-        if meta:
-            hotkey_to_uid = {meta.hotkeys[uid]: uid for uid in range(meta.n)}
-            em_tao_in = 1.0 if n == 0 else tao_in
-            em_alpha_in = 1.0 if n == 0 else alpha_in
-
-            vp_vec = meta_get(meta, "validator_permit")
-            alpha_stake_vec = meta_get(meta, "alpha_stake")
-            if alpha_stake_vec is None:
-                alpha_stake_vec = meta_get(meta, "S")
-
-            for s in subnet_stakes:
-                uid = hotkey_to_uid.get(s.hotkey_ss58)
-                if uid is None or meta_get_uid(meta, "E", uid) <= 0:
-                    continue
-
-                em = calculate_emission(
-                    meta_get_uid(meta, "E", uid), meta.tempo,
-                    em_tao_in, em_alpha_in, tao_price,
-                )
-
-                is_validator = bool(vp_vec[uid]) if vp_vec is not None else False
-
-                if is_validator:
-                    total_stake = float(alpha_stake_vec[uid]) if alpha_stake_vec is not None else 0.0
-                    my_stake = float(s.stake)
-                    share = my_stake / total_stake if total_stake > 0 else 0.0
-                    daily_yield_tao += em.daily_tao * share
-                else:
-                    daily_yield_tao += em.daily_tao
-
-        subnets.append(PortfolioSubnet(
-            netuid=n,
-            name=name,
-            symbol=symbol,
-            balance_alpha=total_alpha,
-            balance_tao=total_tao,
-            price_tao=price,
-            value_usd=total_tao * tao_price,
-            hotkey_count=hotkey_count,
-            daily_yield_tao=daily_yield_tao,
-            daily_yield_usd=daily_yield_tao * tao_price,
-        ))
-
-    subnets.sort(key=lambda s: s.balance_tao, reverse=True)
-    total_balance_tao = free_tao + total_staked_tao
-
-    return PortfolioResponse(
-        coldkey=coldkey,
-        total_balance_tao=total_balance_tao,
-        free_balance_tao=free_tao,
-        total_staked_tao=total_staked_tao,
-        tao_price_usd=tao_price,
-        total_balance_usd=total_balance_tao * tao_price,
-        subnet_count=len(subnets),
-        subnets=subnets,
-    )
+    return PortfolioHistoryResponse(coldkey=coldkey, hours=hours, points=points)

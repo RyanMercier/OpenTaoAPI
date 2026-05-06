@@ -49,6 +49,35 @@ CREATE TABLE IF NOT EXISTS webhook_subscriptions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhook_subscriptions(active);
+
+CREATE TABLE IF NOT EXISTS tracked_wallets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    coldkey_ss58 TEXT NOT NULL UNIQUE,
+    label TEXT,
+    created_at TEXT NOT NULL,
+    last_polled_at TEXT,
+    poll_interval_seconds INTEGER NOT NULL DEFAULT 300,
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracked_wallets_active ON tracked_wallets(active);
+
+CREATE TABLE IF NOT EXISTS wallet_portfolio_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    coldkey_ss58 TEXT NOT NULL,
+    block INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    total_balance_tao REAL,
+    free_balance_tao REAL,
+    total_staked_tao REAL,
+    tao_price_usd REAL,
+    total_balance_usd REAL,
+    subnet_count INTEGER,
+    UNIQUE(coldkey_ss58, block)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wallet_snapshots_coldkey_ts
+    ON wallet_portfolio_snapshots(coldkey_ss58, timestamp);
 """
 
 
@@ -372,6 +401,143 @@ class Database:
         if not row or row[0] is None:
             return None
         return row[0], row[1]
+
+    # --- Tracked wallets ---
+
+    async def add_tracked_wallet(
+        self,
+        coldkey: str,
+        label: str | None,
+        poll_interval_seconds: int,
+        created_at: str,
+    ) -> dict:
+        """Add a wallet to the watchlist. If it already exists (active or
+        archived) flip ``active=1`` and update label/interval rather than
+        inserting a duplicate. Returns the row."""
+        async with self._write_lock:
+            await self._db.execute(
+                """INSERT INTO tracked_wallets
+                       (coldkey_ss58, label, created_at, poll_interval_seconds, active)
+                   VALUES (?, ?, ?, ?, 1)
+                   ON CONFLICT(coldkey_ss58) DO UPDATE SET
+                       label = excluded.label,
+                       poll_interval_seconds = excluded.poll_interval_seconds,
+                       active = 1""",
+                (coldkey, label, created_at, poll_interval_seconds),
+            )
+            await self._db.commit()
+        cursor = await self._db.execute(
+            "SELECT * FROM tracked_wallets WHERE coldkey_ss58 = ?", (coldkey,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else {}
+
+    async def list_tracked_wallets(self, active_only: bool = True) -> list[dict]:
+        sql = "SELECT * FROM tracked_wallets"
+        if active_only:
+            sql += " WHERE active = 1"
+        sql += " ORDER BY id ASC"
+        cursor = await self._db.execute(sql)
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_tracked_wallet(self, coldkey: str) -> dict | None:
+        cursor = await self._db.execute(
+            "SELECT * FROM tracked_wallets WHERE coldkey_ss58 = ?", (coldkey,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def deactivate_tracked_wallet(self, coldkey: str) -> bool:
+        async with self._write_lock:
+            cursor = await self._db.execute(
+                "UPDATE tracked_wallets SET active = 0 WHERE coldkey_ss58 = ?",
+                (coldkey,),
+            )
+            await self._db.commit()
+            return cursor.rowcount > 0
+
+    async def get_wallets_due_for_poll(self, now_iso: str) -> list[dict]:
+        """Active wallets where ``last_polled_at`` is null or older than
+        their per-row interval. Compared in SQL via ``datetime()`` so the
+        ISO-with-offset strings are parsed as timestamps."""
+        cursor = await self._db.execute(
+            """SELECT * FROM tracked_wallets
+               WHERE active = 1
+                 AND (last_polled_at IS NULL
+                      OR (julianday(?) - julianday(last_polled_at)) * 86400.0
+                          >= poll_interval_seconds)
+               ORDER BY id ASC""",
+            (now_iso,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def mark_wallet_polled(self, coldkey: str, polled_at: str) -> None:
+        async with self._write_lock:
+            await self._db.execute(
+                "UPDATE tracked_wallets SET last_polled_at = ? WHERE coldkey_ss58 = ?",
+                (polled_at, coldkey),
+            )
+            await self._db.commit()
+
+    async def insert_wallet_snapshot(self, data: dict) -> bool:
+        """Insert one wallet portfolio snapshot. Idempotent on (coldkey, block)."""
+        async with self._write_lock:
+            try:
+                cursor = await self._db.execute(
+                    """INSERT OR IGNORE INTO wallet_portfolio_snapshots
+                         (coldkey_ss58, block, timestamp,
+                          total_balance_tao, free_balance_tao, total_staked_tao,
+                          tao_price_usd, total_balance_usd, subnet_count)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        data["coldkey_ss58"],
+                        data["block"],
+                        data["timestamp"],
+                        data.get("total_balance_tao"),
+                        data.get("free_balance_tao"),
+                        data.get("total_staked_tao"),
+                        data.get("tao_price_usd"),
+                        data.get("total_balance_usd"),
+                        data.get("subnet_count"),
+                    ),
+                )
+                await self._db.commit()
+                return cursor.rowcount > 0
+            except Exception:
+                logger.exception("Failed to insert wallet snapshot")
+                return False
+
+    async def get_wallet_history(
+        self, coldkey: str, hours: int = 168, limit: int = 500
+    ) -> list[dict]:
+        cursor = await self._db.execute(
+            """SELECT block, timestamp, total_balance_tao, free_balance_tao,
+                      total_staked_tao, tao_price_usd, total_balance_usd,
+                      subnet_count
+               FROM wallet_portfolio_snapshots
+               WHERE coldkey_ss58 = ?
+                 AND datetime(timestamp) >= datetime('now', ?)
+               ORDER BY block ASC
+               LIMIT ?""",
+            (coldkey, f"-{hours} hours", limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_wallet_latest(self, coldkey: str) -> dict | None:
+        cursor = await self._db.execute(
+            """SELECT block, timestamp, total_balance_tao, free_balance_tao,
+                      total_staked_tao, tao_price_usd, total_balance_usd,
+                      subnet_count
+               FROM wallet_portfolio_snapshots
+               WHERE coldkey_ss58 = ?
+               ORDER BY block DESC LIMIT 1""",
+            (coldkey,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
     async def update_tao_prices_hourly(self, prices_by_hour: dict[str, float]) -> int:
         """Fill ``tao_price_usd`` for rows whose timestamp falls in one of the

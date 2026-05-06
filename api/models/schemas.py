@@ -185,6 +185,49 @@ class PortfolioResponse(BaseModel):
     subnets: list[PortfolioSubnet]
 
 
+class PortfolioHistoryPoint(BaseModel):
+    block: int
+    timestamp: str
+    total_balance_tao: float | None = None
+    free_balance_tao: float | None = None
+    total_staked_tao: float | None = None
+    tao_price_usd: float | None = None
+    total_balance_usd: float | None = None
+    subnet_count: int | None = None
+
+
+class PortfolioHistoryResponse(BaseModel):
+    coldkey: str
+    hours: int
+    points: list[PortfolioHistoryPoint]
+
+
+class TrackedWallet(BaseModel):
+    id: int
+    coldkey_ss58: str
+    label: str | None = None
+    created_at: str
+    last_polled_at: str | None = None
+    poll_interval_seconds: int
+    active: bool
+
+
+class TrackedWalletWithLatest(TrackedWallet):
+    latest_block: int | None = None
+    latest_timestamp: str | None = None
+    total_balance_tao: float | None = None
+    total_balance_usd: float | None = None
+    total_staked_tao: float | None = None
+    free_balance_tao: float | None = None
+    subnet_count: int | None = None
+
+
+class TrackWalletRequest(BaseModel):
+    coldkey: str = Field(..., min_length=2, max_length=80, description="SS58 coldkey")
+    label: str | None = Field(default=None, max_length=80)
+    poll_interval_seconds: int = Field(default=300, ge=60, le=86400)
+
+
 class PricePoint(BaseModel):
     block: int
     timestamp: str

@@ -18,6 +18,7 @@ from api.services.broker import SnapshotBroker
 from api.services.cache import TTLCache
 from api.services.chain_client import ChainClient
 from api.services.database import Database
+from api.services.portfolio_service import compute_portfolio
 from api.services.price_client import PriceClient
 
 from api.routes.price import router as price_router, init_price_router
@@ -26,6 +27,7 @@ from api.routes.neuron import router as neuron_router, init_neuron_router
 from api.routes.subnet import router as subnet_router, init_subnet_router
 from api.routes.emissions import router as emissions_router, init_emissions_router
 from api.routes.portfolio import router as portfolio_router, init_portfolio_router
+from api.routes.wallets import router as wallets_router, init_wallets_router
 from api.routes.history import router as history_router, init_history_router
 from api.routes.stream import router as stream_router, init_stream_router
 from api.routes.webhooks import router as webhooks_router, init_webhooks_router
@@ -42,6 +44,8 @@ logger = logging.getLogger(__name__)
 
 BLOCK_TIME_SECONDS = 12
 POLL_TIMEOUT_SECONDS = 60  # per-cycle snapshot timeout
+WALLET_POLL_TIMEOUT_SECONDS = 90  # per-wallet portfolio compute can be slow
+WALLET_POLLER_TICK_SECONDS = 60  # how often we wake to check the wallet queue
 
 cache = TTLCache()
 chain_client = ChainClient(cache)
@@ -296,6 +300,125 @@ async def _poller_supervisor():
             await asyncio.sleep(5)
 
 
+_wallet_backoff: dict[str, dict] = {}
+WALLET_BACKOFF_BASE_SECONDS = 60
+WALLET_BACKOFF_CAP_SECONDS = 1800   # 30 min cap
+
+
+async def _wallet_poller():
+    """Periodically refresh tracked wallets and append portfolio snapshots.
+
+    Iterates the ``tracked_wallets`` table on a slow tick and, for each
+    wallet whose ``poll_interval_seconds`` has elapsed, computes a fresh
+    portfolio and writes one ``wallet_portfolio_snapshots`` row. Errors
+    on a single wallet do not stop the loop; the supervisor restarts the
+    whole task only if the loop itself crashes.
+
+    Per-wallet exponential backoff after consecutive failures keeps a
+    flaky chain RPC from producing a traceback every cycle. Expected
+    failures (chain timeouts, transient substrate-interface KeyErrors)
+    log as one-line warnings; only unexpected exceptions get tracebacks.
+    """
+    logger.info(
+        "Wallet poller started (tick %ds, default per-wallet 5min)",
+        WALLET_POLLER_TICK_SECONDS,
+    )
+    while True:
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            due = await database.get_wallets_due_for_poll(now_iso)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Wallet poller: failed to load tracked wallets")
+            await asyncio.sleep(WALLET_POLLER_TICK_SECONDS)
+            continue
+
+        now_ts = time.time()
+        for wallet in due:
+            coldkey = wallet["coldkey_ss58"]
+
+            # Per-wallet backoff: skip if we recently failed and the penalty
+            # window hasn't elapsed.
+            backoff = _wallet_backoff.get(coldkey)
+            if backoff and now_ts < backoff["resume_at"]:
+                continue
+
+            try:
+                portfolio, block = await asyncio.wait_for(
+                    compute_portfolio(chain_client, price_client, coldkey),
+                    timeout=WALLET_POLL_TIMEOUT_SECONDS,
+                )
+            except (asyncio.TimeoutError, RuntimeError) as e:
+                # Chain RPC timeout or compute_portfolio's wrapped chain
+                # error: expected on a flaky public RPC. One-line warning,
+                # no traceback. Apply exponential backoff so we stop
+                # hammering when the chain is unhappy.
+                _bump_wallet_backoff(coldkey, now_ts)
+                resume_in = int(_wallet_backoff[coldkey]["resume_at"] - now_ts)
+                reason = "timeout" if isinstance(e, asyncio.TimeoutError) else f"chain error ({e})"
+                logger.warning(
+                    "Wallet poller: %s for %s (failures=%d, retry in %ds)",
+                    reason, coldkey,
+                    _wallet_backoff[coldkey]["failures"], resume_in,
+                )
+                await database.mark_wallet_polled(coldkey, now_iso)
+                continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Genuinely unexpected: keep the traceback.
+                _bump_wallet_backoff(coldkey, now_ts)
+                logger.exception(
+                    "Wallet poller: unexpected error for %s", coldkey
+                )
+                await database.mark_wallet_polled(coldkey, now_iso)
+                continue
+
+            # Success: clear any backoff state.
+            _wallet_backoff.pop(coldkey, None)
+
+            row = {
+                "coldkey_ss58": coldkey,
+                "block": block,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "total_balance_tao": portfolio.total_balance_tao,
+                "free_balance_tao": portfolio.free_balance_tao,
+                "total_staked_tao": portfolio.total_staked_tao,
+                "tao_price_usd": portfolio.tao_price_usd,
+                "total_balance_usd": portfolio.total_balance_usd,
+                "subnet_count": portfolio.subnet_count,
+            }
+            await database.insert_wallet_snapshot(row)
+            await database.mark_wallet_polled(coldkey, now_iso)
+
+        await asyncio.sleep(WALLET_POLLER_TICK_SECONDS)
+
+
+def _bump_wallet_backoff(coldkey: str, now_ts: float) -> None:
+    state = _wallet_backoff.get(coldkey, {"failures": 0, "resume_at": 0.0})
+    state["failures"] += 1
+    delay = min(
+        WALLET_BACKOFF_BASE_SECONDS * (2 ** min(state["failures"] - 1, 5)),
+        WALLET_BACKOFF_CAP_SECONDS,
+    )
+    state["resume_at"] = now_ts + delay
+    _wallet_backoff[coldkey] = state
+
+
+async def _wallet_poller_supervisor():
+    while True:
+        try:
+            await _wallet_poller()
+            logger.info("Wallet poller exited cleanly; supervisor stopping")
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Wallet poller crashed; restarting in 5s")
+            await asyncio.sleep(5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await chain_client.startup()
@@ -307,7 +430,8 @@ async def lifespan(app: FastAPI):
     init_neuron_router(chain_client, price_client)
     init_subnet_router(chain_client, price_client)
     init_emissions_router(chain_client, price_client)
-    init_portfolio_router(chain_client, price_client)
+    init_portfolio_router(chain_client, price_client, database)
+    init_wallets_router(database)
     init_history_router(database)
     init_stream_router(broker)
     init_webhooks_router(database)
@@ -324,12 +448,13 @@ async def lifespan(app: FastAPI):
 
     poller_task = asyncio.create_task(_poller_supervisor())
     evaluator_task = asyncio.create_task(_webhook_evaluator_supervisor())
+    wallet_task = asyncio.create_task(_wallet_poller_supervisor())
 
     yield
 
-    for task in (poller_task, evaluator_task):
+    for task in (poller_task, evaluator_task, wallet_task):
         task.cancel()
-    for task in (poller_task, evaluator_task):
+    for task in (poller_task, evaluator_task, wallet_task):
         try:
             await task
         except asyncio.CancelledError:
@@ -364,7 +489,7 @@ app = FastAPI(
         "then `python -m scripts.backfill_prices` to fill TAO/USD on old rows.\n\n"
         "**Source:** [github.com/ryanmercier/OpenTaoAPI](https://github.com/ryanmercier/OpenTaoAPI)"
     ),
-    version="0.5.0",
+    version="0.6.0",
     lifespan=lifespan,
     openapi_tags=[
         {"name": "health", "description": "Liveness + poller freshness probe"},
@@ -396,6 +521,7 @@ app.include_router(neuron_router, prefix="/api/v1")
 app.include_router(subnet_router, prefix="/api/v1")
 app.include_router(emissions_router, prefix="/api/v1")
 app.include_router(portfolio_router, prefix="/api/v1")
+app.include_router(wallets_router, prefix="/api/v1")
 app.include_router(history_router, prefix="/api/v1")
 app.include_router(stream_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
@@ -478,6 +604,11 @@ async def coldkey_alias(coldkey: str):
 @app.get("/webhooks", include_in_schema=False)
 async def webhooks_page():
     return FileResponse(FRONTEND_DIR / "webhooks.html")
+
+
+@app.get("/wallets", include_in_schema=False)
+async def wallets_page():
+    return FileResponse(FRONTEND_DIR / "wallets.html")
 
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")

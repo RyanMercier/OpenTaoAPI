@@ -14,10 +14,11 @@ https://opentao.rpmsystems.io/
 - REST API with full subnet, neuron, emission, and portfolio data
 - TaoStats-compatible `/miner/` endpoint for drop-in replacement
 - OHLC candles for every subnet (`5m`/`15m`/`1h`/`4h`/`1d`)
+- Wallet watchlist with portfolio value persisted over time, charted on the portfolio page
 - Webhook subscriptions for threshold crossings
 - Server-Sent Events stream of live snapshot inserts
 - Embeddable SVG sparkline widgets (no auth required)
-- Web dashboard: portfolio viewer, subnets overview, miners/validators tables
+- Web dashboard: portfolio viewer with history chart, wallet watchlist, subnets overview, miners/validators tables
 - Direct chain queries via Bittensor SDK (no third-party APIs except MEXC for price)
 - Historical data: SQLite storage with epoch-resolution snapshots via public archive node, live polling
 - Backfill scripts pull directly from chain and MEXC, no third-party API keys needed
@@ -54,8 +55,9 @@ docker-compose up -d
 |------|-----|-------------|
 | Subnets dashboard | `/` | All subnets ranked by market cap with sparklines, live SSE-ticking prices |
 | Subnet detail | `/subnet/{netuid}` | Interactive candlestick chart, miners/validators tabs, embed snippet, alert subscribe |
+| Wallets | `/wallets` | Watchlist of tracked coldkeys with sparklines and last-poll age. Add and remove inline. |
 | Webhooks | `/webhooks` | Create, list, and delete webhook subscriptions |
-| Portfolio | `/portfolio/{coldkey}` | Coldkey balance across all subnets (daily yield, hotkey count) |
+| Portfolio | `/portfolio/{coldkey}` | Coldkey balance across all subnets, with portfolio value over time chart for tracked wallets |
 
 Old URL `/subnet/{netuid}/miners` redirects to `/subnet/{netuid}?tab=miners`.
 
@@ -80,9 +82,40 @@ Current TAO/USDT from MEXC. Cached 30s.
 
 ```
 GET /api/v1/portfolio/{coldkey}
+GET /api/v1/portfolio/{coldkey}/history?hours=168
 ```
 
-Cross-subnet portfolio for a coldkey. Returns total balance (TAO + USD), free balance, staked balance, and per-subnet breakdown with alpha balance, TAO equivalent, price, daily yield.
+`/portfolio/{coldkey}` is the live cross-subnet portfolio: total balance (TAO + USD), free balance, staked balance, and per-subnet breakdown with alpha balance, TAO equivalent, price, daily yield.
+
+`/portfolio/{coldkey}/history` returns a time series of total portfolio value for any coldkey on the watchlist (see Wallets below). Empty array if the coldkey isn't tracked yet. Drop into a charting library or query straight from a notebook.
+
+### Wallets (watchlist)
+
+```
+POST   /api/v1/wallets
+GET    /api/v1/wallets
+DELETE /api/v1/wallets/{coldkey}
+```
+
+Add a coldkey to the watchlist and the background poller refreshes it on the configured cadence (default 5 minutes), persisting one row per cycle to `wallet_portfolio_snapshots`. The portfolio page then has a real value-over-time chart instead of a single point. `POST` is idempotent: re-adding an existing coldkey reactivates polling and updates the label/interval without losing the snapshot history.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/wallets \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "coldkey": "5EhrSbeGeiLgsXcJTXXaBCcqrrMubvWcykSwk4Ho6KUd5sQG",
+    "label": "demo",
+    "poll_interval_seconds": 300
+  }'
+
+# list watchlist with each wallet's most recent snapshot inline
+curl http://localhost:8000/api/v1/wallets
+
+# soft-delete; history is preserved, polling stops
+curl -X DELETE http://localhost:8000/api/v1/wallets/5EhrSbe...
+```
+
+`poll_interval_seconds` accepts 60-86400. The poller uses the same supervised-restart pattern as the subnet poller, so a stuck RPC on one wallet doesn't block the others.
 
 ### Miner (TaoStats-compatible)
 
@@ -329,7 +362,8 @@ OpenTaoAPI/
 │   │   ├── neuron.py           # Neuron lookup by UID/hotkey/coldkey
 │   │   ├── subnet.py           # Subnet info, metagraph, miners, validators, /subnets
 │   │   ├── emissions.py        # Emission breakdown
-│   │   ├── portfolio.py        # Cross-subnet portfolio
+│   │   ├── portfolio.py        # Cross-subnet portfolio + history endpoint
+│   │   ├── wallets.py          # Watchlist CRUD (add/list/remove tracked coldkeys)
 │   │   ├── history.py          # Historical snapshots + OHLC candles
 │   │   ├── stream.py           # Server-Sent Events live feed
 │   │   ├── webhooks.py         # Threshold-crossing webhook subscriptions
@@ -338,8 +372,9 @@ OpenTaoAPI/
 │   │   ├── chain_client.py     # Bittensor SDK wrapper with per-RPC timeouts
 │   │   ├── price_client.py     # MEXC live price + historical klines
 │   │   ├── cache.py            # In-memory TTL cache
-│   │   ├── database.py         # SQLite storage (snapshots + webhook subscriptions)
+│   │   ├── database.py         # SQLite storage (snapshots, webhooks, wallet watchlist)
 │   │   ├── broker.py           # Fan-out broker for live snapshot events
+│   │   ├── portfolio_service.py # Shared portfolio compute (route + wallet poller)
 │   │   ├── metagraph_compat.py # SDK version compatibility layer
 │   │   └── calculations.py     # Emission math
 │   └── models/
@@ -354,7 +389,8 @@ OpenTaoAPI/
 │   ├── subnets.html            # Subnets dashboard (landing page)
 │   ├── subnet-detail.html      # Per-subnet view: chart, miners, validators, embed
 │   ├── webhooks.html           # Webhook management UI
-│   ├── index.html              # Portfolio page (/portfolio)
+│   ├── wallets.html            # Watchlist UI (/wallets)
+│   ├── index.html              # Portfolio page (/portfolio) with value-over-time chart
 │   └── vendor/
 │       └── lightweight-charts.standalone.production.js  # TradingView charts, Apache-2.0
 ├── docs/
@@ -398,6 +434,7 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 | OHLC candles | ✅ | ❌ | ✅ | ✅ |
 | Miner and validator tables | ✅ | ✅ | ✅ | ✅ |
 | Coldkey portfolio view | ✅ | ✅ | ✅ | ✅ |
+| Persistent portfolio value over time (per-wallet history) | ✅ | partial | partial | partial |
 | Full metagraph export | ✅ | limited | ❌ | limited |
 | Stake transfer tracking | ❌ | ✅ | ❌ | ✅ |
 | Holder breakdowns | ❌ | ✅ | ✅ | ✅ |
