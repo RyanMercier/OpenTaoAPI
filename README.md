@@ -16,6 +16,8 @@ https://opentao.rpmsystems.io/
 - OHLC candles for every subnet (`5m`/`15m`/`1h`/`4h`/`1d`)
 - Wallet watchlist with portfolio value persisted over time, charted on the portfolio page
 - Paper trading runner with strategy plugin registry: built-in stake_velocity, mean_reversion, momentum, drain_exit; bring your own via `OPENTAO_EXTERNAL_STRATEGIES`
+- Live on-chain execution: same signal pipeline, real `add_stake` / `unstake` extrinsics, CLI-only with the wallet decrypted in your terminal (keys never reach the FastAPI process)
+- Per-portfolio metrics: total return, vs pool-weighted buy-and-hold, alpha, Sharpe, Sortino, win rate, max drawdown, profit factor
 - Backtester with constant-product AMM slippage, per-hotkey rate limits, and zero lookahead bias
 - Webhook subscriptions for threshold crossings
 - Server-Sent Events stream of live snapshot inserts
@@ -92,12 +94,13 @@ GET /api/v1/portfolio/{coldkey}/history?hours=168
 
 `/portfolio/{coldkey}/history` returns a time series of total portfolio value for any coldkey on the watchlist (see Wallets below). Empty array if the coldkey isn't tracked yet. Drop into a charting library or query straight from a notebook.
 
-### Paper trading
+### Paper and live trading
 
 ```
 POST   /api/v1/paper/portfolios
 GET    /api/v1/paper/portfolios
 GET    /api/v1/paper/portfolios/{id}
+GET    /api/v1/paper/portfolios/{id}/stats
 GET    /api/v1/paper/portfolios/{id}/positions
 GET    /api/v1/paper/portfolios/{id}/trades
 GET    /api/v1/paper/portfolios/{id}/history
@@ -105,6 +108,8 @@ POST   /api/v1/paper/portfolios/{id}/pause
 POST   /api/v1/paper/portfolios/{id}/resume
 GET    /api/v1/trading/strategies
 ```
+
+The same routes serve paper and live portfolios; each row carries a `mode` field of `paper` or `live`. The `/stats` endpoint returns headline metrics: portfolio value, total return, vs-benchmark return, alpha, annualized Sharpe and Sortino, max drawdown, win rate, win/loss counts, average win/loss, profit factor, average hold hours.
 
 Create a paper portfolio, pick which registered strategies it should run, and the background runner advances it on the configured cadence using the same in-process chain client and snapshot poller. State persists to `paper_portfolios` / `paper_positions` / `paper_trades` / `paper_value_history` so a restart picks up where the previous process stopped.
 
@@ -120,6 +125,33 @@ curl -X POST http://localhost:8000/api/v1/paper/portfolios \
 ```
 
 The runner is gated by `PAPER_TRADING_ENABLED=true`; reads work either way so you can browse the dashboard on a public instance without running anyone's bot. `drain_exit` is always added as a safety net regardless of which entry strategies you pick.
+
+#### Live trading (real on-chain stake/unstake)
+
+Live trading is CLI-only. The web layer never sees your coldkey. The CLI launches a separate process that loads the wallet from `~/.bittensor/wallets/<name>/`, prompts for the password on stdin, and calls `subtensor.add_stake` / `unstake` on the same signal pipeline the paper trader uses. It writes the resulting trades into the same SQLite the web UI reads from, so the `/paper/{id}` page (with its equity curve, benchmark, and stats) just works for live portfolios too.
+
+```bash
+# 1. Create the portfolio first via the web UI or API (paper mode by default)
+curl -X POST http://localhost:8000/api/v1/paper/portfolios \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "live-demo", "initial_capital_tao": 10, "strategies": ["mean_reversion"]}'
+
+# 2. Promote to live and start the runner.
+python -m api.trading.cli live \
+  --portfolio live-demo \
+  --wallet my_wallet \
+  --hotkey default
+
+# Stops on Ctrl+C. Web UI shows a LIVE badge and reflects every trade.
+```
+
+Pre-flight checks fire on every trade:
+
+- Re-fetch the pool to re-check slippage at the actual current state. If the pool moved past `max_slippage_pct` since the snapshot the strategy used, the trade is skipped.
+- Coldkey free balance (with a 0.01 TAO buffer for fees).
+- Kill-switch: if intraday loss reaches `daily_loss_limit_pct`, the runner sets the portfolio to inactive and refuses further entries until the operator explicitly re-enables.
+
+Use `--dry-run` to test the pipeline against your wallet credentials without submitting any extrinsics. The trader runs the full signal loop and logs every cycle, just like a paper run, but never touches the chain.
 
 #### Plugin strategies
 
@@ -469,6 +501,7 @@ OpenTaoAPI/
 │   │   ├── risk.py             # Position-sizing risk manager
 │   │   ├── portfolio.py        # PortfolioTracker (in-memory, SQLite-backed)
 │   │   ├── paper_trader.py     # In-process paper trading runner
+│   │   ├── live_trader.py      # Live on-chain trader (extends PaperTrader, signs extrinsics)
 │   │   ├── backtester.py       # Historical replay with rate limits and slippage
 │   │   ├── data.py             # Read-only DataLoader over subnet_snapshots
 │   │   ├── cli.py              # python -m api.trading.cli ...
@@ -535,6 +568,8 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 | Coldkey portfolio view | ✅ | ✅ | ✅ | ✅ |
 | Persistent portfolio value over time (per-wallet history) | ✅ | partial | partial | partial |
 | Paper trading runner with plugin strategies | ✅ | ❌ | ❌ | ❌ |
+| Live on-chain execution from your own keys (CLI signs locally) | ✅ | ❌ | ❌ | ❌ |
+| Headline metrics endpoint (Sharpe, win rate, drawdown, alpha vs benchmark) | ✅ | partial | partial | partial |
 | Backtester with AMM slippage + rate limits | ✅ | ❌ | ❌ | ❌ |
 | Full metagraph export | ✅ | limited | ❌ | limited |
 | Stake transfer tracking | ❌ | ✅ | ❌ | ✅ |

@@ -1,9 +1,9 @@
 """Wallet watchlist CRUD.
 
-A tracked wallet is a coldkey the operator wants snapshots of over time.
-The background ``_wallet_poller`` in ``api/main.py`` reads this table and
-inserts rows into ``wallet_portfolio_snapshots``. The ``/portfolio/{coldkey}``
-page reads the resulting series for its time-of-flight chart.
+A tracked wallet is just a coldkey we want to snapshot on a schedule.
+``_wallet_poller`` (in ``api/main.py``) reads this table and writes rows
+into ``wallet_portfolio_snapshots``; the portfolio page reads those rows
+to draw its history chart.
 """
 import logging
 from datetime import datetime, timezone

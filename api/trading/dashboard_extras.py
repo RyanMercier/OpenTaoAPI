@@ -616,7 +616,7 @@ def _render_html(
   <div class="section">
     <div class="section-title">
       Equity Curve
-      <span class="sub">strategy vs TAO-pool-weighted subnet basket (winsorized 0.2×-5×)</span>
+      <span class="sub">strategy vs TAO-pool-weighted subnet basket (winsorized 0.2x-5x)</span>
     </div>
     <div class="chart-card"><canvas id="valueChart"></canvas></div>
   </div>
@@ -670,7 +670,7 @@ function renderHero() {{
 
   // Meta line: duration + trade count
   const labels = (DATA.chart || {{labels:[]}}).labels;
-  const span = labels.length ? `${{labels[0]}} → ${{labels[labels.length-1]}}` : '';
+  const span = labels.length ? `${{labels[0]}} -> ${{labels[labels.length-1]}}` : '';
   document.getElementById('metaLine').textContent =
     `${{span}} · ${{e.total_trades}} trades`;
 

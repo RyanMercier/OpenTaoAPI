@@ -12,15 +12,12 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Optional
-
 from .dashboard import (
     CHART_JS_CDN,
     _compute_benchmark,
     _entry_exit_matrix,
     _hold_histogram,
     _json_default,
-    _month_heatmap_html,
     _per_subnet_pnl,
     _rolling_returns,
     _trade_histogram,
@@ -317,7 +314,7 @@ def generate_comparison_dashboard(
 </div>
 
 <div class="chart-container">
-  <h2>Entry → Exit Attribution</h2>
+  <h2>Entry -> Exit Attribution</h2>
   <div id="eeMatrix"></div>
   <p style="color:#888;font-size:12px;margin-top:6px">
     Rows = entry strategy, columns = exit strategy. Cell: trade count · win rate · total P&L TAO.
@@ -398,7 +395,7 @@ function renderBanner() {
     ` over ${days}d (annualized ${(s.annualized_return_pct*100).toFixed(1)}%, Sharpe ${s.sharpe.toFixed(2)})`;
   const alphaClass = alpha >= 0 ? 'good' : 'bad';
   document.getElementById('bannerSub').innerHTML =
-    `vs B&amp;H ${bnh} → <span class="${alphaClass}">alpha ${alphaStr}</span>` +
+    `vs B&amp;H ${bnh} -> <span class="${alphaClass}">alpha ${alphaStr}</span>` +
     ` · max DD ${pct(s.max_drawdown_pct)} · ${s.total_trades} trades, ${pct(s.win_rate)} win rate`;
   const strats = (s.strategies || []).filter(x => x !== 'drain_exit').join(',');
   const hk = s.num_hotkeys || 2;
@@ -461,7 +458,7 @@ function renderEquity() {
                 const arr = ctx.dataset.label==='Buys'?buys:sells;
                 const src = arr[ctx.dataIndex];
                 const pnl = src.pnl_pct!=null?` pnl ${(src.pnl_pct*100).toFixed(2)}%`:'';
-                const e = src.entry_strategy?`${src.entry_strategy}→${src.strategy}`:src.strategy;
+                const e = src.entry_strategy?`${src.entry_strategy}->${src.strategy}`:src.strategy;
                 return `${ctx.dataset.label} SN${src.netuid} [${e}]${pnl}`;
               }
               return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(3)} TAO`;

@@ -51,9 +51,12 @@ class ChainClient:
             ttl=settings.cache_ttl_metagraph,
         )
 
-    async def get_dynamic_info(self, netuid: int):
+    async def get_dynamic_info(self, netuid: int, force_refresh: bool = False):
+        key = f"dynamic_info:{netuid}"
+        if force_refresh:
+            await self._cache.invalidate(key)
         return await self._cache.get_or_set(
-            f"dynamic_info:{netuid}",
+            key,
             lambda: self._call(lambda: self._subtensor.subnet(netuid=netuid)),
             ttl=settings.cache_ttl_dynamic_info,
         )

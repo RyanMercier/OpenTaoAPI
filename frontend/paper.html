@@ -149,11 +149,66 @@
   margin-bottom: 18px;
 }
 
-.value-card, .draw-card, .table-card {
+.value-card, .draw-card, .table-card, .stats-card {
   background: var(--bg-raised);
   border: 1px solid var(--border);
   padding: 14px 16px;
   margin-bottom: 14px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.stat-value {
+  font-family: var(--mono);
+  font-size: 18px;
+  color: var(--text-bright);
+  font-weight: 500;
+  letter-spacing: -0.3px;
+}
+.stat-value.v-good { color: var(--accent); }
+.stat-value.v-bad { color: var(--red); }
+.stat-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.mode-badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  letter-spacing: 0.6px;
+  margin-left: 8px;
+  vertical-align: 2px;
+}
+.mode-badge.paper {
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.mode-badge.live {
+  color: #001914;
+  background: var(--accent);
+  border: 1px solid var(--accent);
 }
 .section-title {
   font-size: 11px;
@@ -387,7 +442,11 @@ async function renderIndex() {
       <div class="portfolios-grid" id="portfoliosGrid">
         ${portfolios.map(p => `
           <a class="portfolio-card" href="/paper/${p.id}">
-            <div class="pc-name">${esc(p.name)} ${p.active ? '' : '<span class="dim" style="font-size:11px;font-weight:400">[paused]</span>'}</div>
+            <div class="pc-name">
+              ${esc(p.name)}
+              <span class="mode-badge ${p.mode === 'live' ? 'live' : 'paper'}">${esc((p.mode || 'paper').toUpperCase())}</span>
+              ${p.active ? '' : '<span class="dim" style="font-size:11px;font-weight:400">[paused]</span>'}
+            </div>
             <div class="pc-stats">
               <span>${fmtTao(p.free_tao ?? p.initial_capital_tao)}</span>
               <span class="${(p.peak_value || 0) > p.initial_capital_tao ? 'v-good' : 'dim'}">peak ${fmtTao(p.peak_value)}</span>
@@ -460,13 +519,14 @@ let currentDetailId = null;
 
 async function renderDetail(pid) {
   currentDetailId = pid;
-  let p, hist, positions, trades;
+  let p, hist, positions, trades, stats;
   try {
-    const [pr, hr, posR, tr] = await Promise.all([
+    const [pr, hr, posR, tr, sr] = await Promise.all([
       fetch(`${API}/paper/portfolios/${pid}`),
       fetch(`${API}/paper/portfolios/${pid}/history?hours=168`),
       fetch(`${API}/paper/portfolios/${pid}/positions`),
       fetch(`${API}/paper/portfolios/${pid}/trades?limit=200`),
+      fetch(`${API}/paper/portfolios/${pid}/stats`),
     ]);
     if (pr.status === 404) {
       main.innerHTML = `<div class="error-msg">Portfolio ${pid} not found</div>`;
@@ -476,6 +536,7 @@ async function renderDetail(pid) {
     hist = hr.ok ? await hr.json() : { points: [] };
     positions = posR.ok ? await posR.json() : [];
     trades = tr.ok ? await tr.json() : [];
+    stats = sr.ok ? await sr.json() : null;
   } catch (e) {
     main.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     return;
@@ -491,19 +552,22 @@ async function renderDetail(pid) {
 
   main.innerHTML = `
     <div class="detail-head">
-      <a class="detail-back" href="/paper">← All portfolios</a>
+      <a class="detail-back" href="/paper">All portfolios</a>
       <div></div>
     </div>
-    <h1 class="detail-title">${esc(p.name)} ${p.active ? '' : '<span class="dim" style="font-size:14px;font-weight:400">[paused]</span>'}</h1>
+    <h1 class="detail-title">
+      ${esc(p.name)}
+      <span class="mode-badge ${p.mode === 'live' ? 'live' : 'paper'}">${esc((p.mode || 'paper').toUpperCase())}</span>
+      ${p.active ? '' : '<span class="dim" style="font-size:14px;font-weight:400">[paused]</span>'}
+    </h1>
     <div class="detail-meta">
-      <span>Value ${fmtTao(value, 3)}</span>
-      <span class="${pnl >= 0 ? 'v-good' : 'v-bad'}" style="font-family:var(--mono)">${fmtPct(pnl)}</span>
-      ${benchPnl != null ? `<span>vs B&H <span class="${benchPnl >= 0 ? 'v-good' : 'v-bad'}">${fmtPct(benchPnl)}</span></span>` : ''}
-      ${alpha != null ? `<span>Alpha <span class="${alpha >= 0 ? 'v-good' : 'v-bad'}">${fmtPct(alpha)}</span></span>` : ''}
-      <span>Peak ${fmtTao(peak, 3)}</span>
-      <span>Free ${fmtTao(p.free_tao, 3)}</span>
       <span>Strategies: ${(p.strategies || []).map(esc).join(', ') || '-'}</span>
+      ${p.wallet_name ? `<span>Wallet: ${esc(p.wallet_name)}${p.hotkey_name ? ' / ' + esc(p.hotkey_name) : ''}</span>` : ''}
       <span>Last cycle ${esc(fmtAge(p.last_cycle_at))}</span>
+    </div>
+
+    <div class="stats-card">
+      ${renderStats(p, stats, value, pnl, benchPnl, alpha, peak)}
     </div>
 
     <div class="value-card">
@@ -601,6 +665,71 @@ async function renderDetail(pid) {
 async function togglePortfolio(pid, action) {
   await fetch(`${API}/paper/portfolios/${pid}/${action}`, { method: 'POST' });
   renderDetail(pid);
+}
+
+function statTile(label, value, opts = {}) {
+  const cls = opts.tone === 'good' ? 'v-good' : opts.tone === 'bad' ? 'v-bad' : '';
+  const sub = opts.sub ? `<span class="stat-sub">${esc(opts.sub)}</span>` : '';
+  return `
+    <div class="stat">
+      <span class="stat-label">${esc(label)}</span>
+      <span class="stat-value ${cls}">${value}</span>
+      ${sub}
+    </div>`;
+}
+
+function tone(n) {
+  if (n == null || isNaN(n)) return '';
+  return n > 0 ? 'good' : n < 0 ? 'bad' : '';
+}
+
+function fmtNum(n, digits = 2) {
+  if (n == null || isNaN(n)) return '-';
+  return n.toFixed(digits);
+}
+
+function renderStats(p, stats, fallbackValue, fallbackPnl, benchPnl, alpha, peak) {
+  // Stats endpoint may have failed; fall back to the values we already
+  // computed from the history payload so the card always paints.
+  const cur = stats?.current_value_tao ?? fallbackValue;
+  const ret = stats?.total_return_pct ?? fallbackPnl ?? 0;
+  const bench = stats?.benchmark_return_pct ?? benchPnl;
+  const a = stats?.alpha_pct ?? alpha;
+  const sharpe = stats?.sharpe_ratio ?? 0;
+  const sortino = stats?.sortino_ratio ?? 0;
+  const dd = stats?.max_drawdown_pct ?? 0;
+  const winRate = stats?.win_rate ?? 0;
+  const totalTrades = stats?.total_trades ?? 0;
+  const wins = stats?.winning_trades ?? 0;
+  const losses = stats?.losing_trades ?? 0;
+  const avgWin = stats?.avg_win_pct;
+  const avgLoss = stats?.avg_loss_pct;
+  const profitFactor = stats?.profit_factor;
+  const avgHold = stats?.avg_hold_hours ?? 0;
+  const cycles = stats?.cycles ?? 0;
+
+  return `
+    <div class="stats-grid">
+      ${statTile('Portfolio value', fmtTao(cur, 3), { sub: `${cycles} cycles` })}
+      ${statTile('Total return', fmtPct(ret), { tone: tone(ret) })}
+      ${bench != null ? statTile('Buy & hold return', fmtPct(bench), { tone: tone(bench) }) : ''}
+      ${a != null ? statTile('Alpha vs B&H', fmtPct(a), { tone: tone(a) }) : ''}
+      ${statTile('Sharpe (annualized)', fmtNum(sharpe, 2), { tone: tone(sharpe), sub: 'rf=0' })}
+      ${statTile('Sortino', fmtNum(sortino, 2), { tone: tone(sortino) })}
+      ${statTile('Max drawdown', '-' + (dd * 100).toFixed(2) + '%', { tone: dd > 0 ? 'bad' : '' })}
+      ${statTile('Win rate', (winRate * 100).toFixed(1) + '%', {
+        sub: `${wins}W / ${losses}L`,
+      })}
+      ${statTile('Total trades', String(totalTrades), {
+        sub: avgHold > 0 ? `avg hold ${avgHold.toFixed(1)}h` : ''
+      })}
+      ${(avgWin || avgLoss) ? statTile(
+        'Avg win / loss',
+        (avgWin != null ? fmtPct(avgWin) : '-') + ' / ' + (avgLoss != null ? fmtPct(avgLoss) : '-'),
+        { sub: profitFactor != null ? 'PF ' + profitFactor.toFixed(2) : '' }
+      ) : ''}
+      ${statTile('Peak', fmtTao(peak, 3), { sub: 'Free ' + fmtTao(p.free_tao, 3) })}
+    </div>`;
 }
 
 function setupEquityChart(hist, trades) {

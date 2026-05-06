@@ -25,9 +25,9 @@ import itertools
 import math
 import random
 import statistics
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
-from typing import Callable, Optional
+from typing import Optional
 
 from .backtester import Backtester, BacktestResult
 from .config import TradingConfig
@@ -137,7 +137,7 @@ class MonteCarloRunner:
         total_days = (hi - lo).total_seconds() / 86400
         if total_days <= window_days:
             # Only one meaningful window exists
-            return [self._run_once(lo, hi, None, f"full", strategies)]
+            return [self._run_once(lo, hi, None, "full", strategies)]
 
         runs: list[MCRun] = []
         for i in range(num_runs):

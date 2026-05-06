@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS paper_portfolios (
     config_json TEXT NOT NULL,                -- TradingConfig serialized
     created_at TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
+    -- 'paper' simulates against AMM math; 'live' calls add_stake / remove_stake
+    mode TEXT NOT NULL DEFAULT 'paper',
+    -- Bittensor wallet on disk (~/.bittensor/wallets/<wallet_name>/) for
+    -- mode='live'. NULL for paper. The CLI runner is the only thing that
+    -- ever reads the actual coldkey; the API never sees it.
+    wallet_name TEXT,
+    hotkey_name TEXT,
     -- Runtime state, updated each cycle so a restart can rehydrate.
     free_tao REAL,
     peak_value REAL,
@@ -131,6 +138,9 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     pnl_pct REAL,
     hold_duration_hours REAL,
     entry_strategy TEXT,
+    -- Populated only on mode='live' trades. NULL otherwise.
+    extrinsic_hash TEXT,
+    executed_block INTEGER,
     FOREIGN KEY (portfolio_id) REFERENCES paper_portfolios(id)
 );
 CREATE INDEX IF NOT EXISTS idx_paper_trades_portfolio_ts
@@ -166,8 +176,33 @@ class Database:
         self._db = await aiosqlite.connect(self._path)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
+        await self._migrate_in_place()
         await self._db.commit()
         logger.info(f"Database ready at {self._path}")
+
+    async def _migrate_in_place(self):
+        """Add columns missing from older databases. SQLite's ALTER TABLE
+        ADD COLUMN has no IF NOT EXISTS, so we PRAGMA the schema and only
+        add what's not there. Constant DEFAULTs let existing rows backfill
+        automatically."""
+        migrations = [
+            ("paper_portfolios", "mode", "TEXT NOT NULL DEFAULT 'paper'"),
+            ("paper_portfolios", "wallet_name", "TEXT"),
+            ("paper_portfolios", "hotkey_name", "TEXT"),
+            ("paper_trades", "extrinsic_hash", "TEXT"),
+            ("paper_trades", "executed_block", "INTEGER"),
+        ]
+        for table, column, dtype in migrations:
+            cursor = await self._db.execute(f"PRAGMA table_info({table})")
+            cols = [r[1] for r in await cursor.fetchall()]
+            if column not in cols:
+                try:
+                    await self._db.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {dtype}"
+                    )
+                    logger.info("Migrated: added %s.%s", table, column)
+                except aiosqlite.OperationalError as e:
+                    logger.warning("Migration skip %s.%s: %s", table, column, e)
 
     async def shutdown(self):
         if self._db:
@@ -687,6 +722,29 @@ class Database:
             await self._db.commit()
             return cursor.rowcount > 0
 
+    async def set_paper_portfolio_mode(
+        self,
+        portfolio_id: int,
+        mode: str,
+        wallet_name: str | None = None,
+        hotkey_name: str | None = None,
+    ) -> bool:
+        """Promote a portfolio between paper and live. Live mode requires
+        a wallet+hotkey name on disk; paper mode clears them."""
+        if mode not in ("paper", "live"):
+            raise ValueError(f"mode must be 'paper' or 'live', got {mode!r}")
+        if mode == "live" and not wallet_name:
+            raise ValueError("wallet_name required for mode='live'")
+        async with self._write_lock:
+            cursor = await self._db.execute(
+                """UPDATE paper_portfolios
+                   SET mode = ?, wallet_name = ?, hotkey_name = ?
+                   WHERE id = ?""",
+                (mode, wallet_name, hotkey_name, portfolio_id),
+            )
+            await self._db.commit()
+            return cursor.rowcount > 0
+
     async def list_paper_positions(self, portfolio_id: int) -> list[dict]:
         cursor = await self._db.execute(
             """SELECT netuid, entry_block, entry_time, entry_price,
@@ -701,9 +759,9 @@ class Database:
     async def replace_paper_positions(
         self, portfolio_id: int, positions: dict
     ) -> None:
-        """Atomic replace: clear existing rows for this portfolio, then
-        insert one per current Position. The trader holds the source of
-        truth in memory; the table is just a crash-safe mirror."""
+        """Replace this portfolio's open-position rows with the trader's
+        current set. The trader's in-memory dict is the source of truth;
+        the table is a crash-safe mirror."""
         async with self._write_lock:
             await self._db.execute(
                 "DELETE FROM paper_positions WHERE portfolio_id = ?",
@@ -735,10 +793,17 @@ class Database:
                 )
             await self._db.commit()
 
-    async def insert_paper_trade(self, portfolio_id: int, trade) -> None:
+    async def insert_paper_trade(
+        self,
+        portfolio_id: int,
+        trade,
+        extrinsic_hash: str | None = None,
+        executed_block: int | None = None,
+    ) -> None:
         """Append one trade row. ``trade`` is an ``api.trading.models.Trade``
-        but kept untyped here to avoid importing the trading package from
-        the database service."""
+        but typed loosely here so the database module doesn't need to
+        import the trading package. ``extrinsic_hash`` and ``executed_block``
+        only apply to live trades."""
         ts = (
             trade.timestamp.isoformat()
             if hasattr(trade.timestamp, "isoformat")
@@ -751,8 +816,9 @@ class Database:
                       strategy, tao_amount, alpha_amount, spot_price,
                       effective_price, slippage_pct, signal_strength,
                       hotkey_id, entry_price, pnl_tao, pnl_pct,
-                      hold_duration_hours, entry_strategy)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      hold_duration_hours, entry_strategy,
+                      extrinsic_hash, executed_block)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     trade.id, portfolio_id, ts, int(trade.block),
                     int(trade.netuid),
@@ -768,6 +834,8 @@ class Database:
                     float(trade.pnl_pct) if trade.pnl_pct is not None else None,
                     float(trade.hold_duration_hours) if trade.hold_duration_hours is not None else None,
                     trade.entry_strategy.value if (trade.entry_strategy and hasattr(trade.entry_strategy, "value")) else None,
+                    extrinsic_hash,
+                    executed_block,
                 ),
             )
             await self._db.commit()
@@ -780,7 +848,7 @@ class Database:
                       tao_amount, alpha_amount, spot_price, effective_price,
                       slippage_pct, signal_strength, hotkey_id,
                       entry_price, pnl_tao, pnl_pct, hold_duration_hours,
-                      entry_strategy
+                      entry_strategy, extrinsic_hash, executed_block
                FROM paper_trades WHERE portfolio_id = ?
                ORDER BY datetime(timestamp) DESC LIMIT ?""",
             (portfolio_id, limit),
@@ -846,6 +914,162 @@ class Database:
         )
         row = await cursor.fetchone()
         return row["timestamp"] if row else None
+
+    async def compute_paper_portfolio_stats(
+        self,
+        portfolio_id: int,
+        cadence_seconds: int = 1800,
+        exclude_netuids: list[int] | None = None,
+        min_pool_depth_tao: float = 50.0,
+    ) -> dict | None:
+        """Headline metrics over a portfolio's full lifetime: returns,
+        Sharpe, Sortino, drawdown, win rate, profit factor. Sharpe and
+        Sortino are annualized using ``cadence_seconds`` as the bar
+        width, so pass the portfolio's ``paper_poll_interval_seconds``."""
+        portfolio = await self.get_paper_portfolio(portfolio_id)
+        if not portfolio:
+            return None
+
+        initial = float(portfolio["initial_capital_tao"])
+        cursor = await self._db.execute(
+            """SELECT timestamp, total_value_tao, drawdown_pct
+               FROM paper_value_history WHERE portfolio_id = ?
+               ORDER BY datetime(timestamp) ASC""",
+            (portfolio_id,),
+        )
+        history = [dict(r) for r in await cursor.fetchall()]
+
+        # Trade aggregates: realized P&L on closed positions.
+        cursor = await self._db.execute(
+            """SELECT direction, pnl_tao, pnl_pct, hold_duration_hours
+               FROM paper_trades WHERE portfolio_id = ?""",
+            (portfolio_id,),
+        )
+        trade_rows = [dict(r) for r in await cursor.fetchall()]
+        total_trades = len(trade_rows)
+        sells = [t for t in trade_rows
+                 if t["direction"] == "sell" and t["pnl_tao"] is not None]
+        winning = [t for t in sells if (t["pnl_tao"] or 0) > 0]
+        losing = [t for t in sells if (t["pnl_tao"] or 0) <= 0]
+        win_rate = (len(winning) / len(sells)) if sells else 0.0
+        avg_win_pct = (
+            sum(float(t["pnl_pct"]) for t in winning) / len(winning)
+        ) if winning else 0.0
+        avg_loss_pct = (
+            sum(float(t["pnl_pct"]) for t in losing) / len(losing)
+        ) if losing else 0.0
+        gross_wins = sum(float(t["pnl_tao"]) for t in winning) if winning else 0.0
+        gross_losses = abs(sum(float(t["pnl_tao"]) for t in losing)) if losing else 0.0
+        profit_factor: float | None
+        if gross_losses > 0:
+            profit_factor = gross_wins / gross_losses
+        elif gross_wins > 0:
+            profit_factor = None  # division by zero, no losses yet
+        else:
+            profit_factor = 0.0
+        hold_hours = [
+            float(t["hold_duration_hours"]) for t in sells
+            if t["hold_duration_hours"] is not None
+        ]
+        avg_hold_hours = (sum(hold_hours) / len(hold_hours)) if hold_hours else 0.0
+
+        # Value-history-derived metrics.
+        if not history:
+            current = float(portfolio.get("free_tao") or initial)
+            return {
+                "portfolio_id": portfolio_id,
+                "mode": portfolio.get("mode", "paper"),
+                "initial_capital_tao": initial,
+                "current_value_tao": current,
+                "total_return_pct": (current - initial) / initial if initial > 0 else 0.0,
+                "benchmark_return_pct": 0.0,
+                "alpha_pct": 0.0,
+                "sharpe_ratio": 0.0,
+                "sortino_ratio": 0.0,
+                "max_drawdown_pct": 0.0,
+                "cycles": 0,
+                "cadence_seconds": cadence_seconds,
+                "total_trades": total_trades,
+                "winning_trades": len(winning),
+                "losing_trades": len(losing),
+                "win_rate": win_rate,
+                "avg_win_pct": avg_win_pct,
+                "avg_loss_pct": avg_loss_pct,
+                "profit_factor": profit_factor,
+                "avg_hold_hours": avg_hold_hours,
+            }
+
+        values = [float(r["total_value_tao"]) for r in history]
+        current = values[-1]
+        total_return = (current - initial) / initial if initial > 0 else 0.0
+
+        # Period returns; need at least 2 values for a single return,
+        # 2 returns for a meaningful std.
+        returns: list[float] = []
+        for i in range(1, len(values)):
+            prev = values[i - 1]
+            if prev > 0:
+                returns.append(values[i] / prev - 1)
+
+        sharpe = 0.0
+        sortino = 0.0
+        if len(returns) >= 2:
+            mean_r = sum(returns) / len(returns)
+            var_r = sum((r - mean_r) ** 2 for r in returns) / len(returns)
+            std_r = var_r ** 0.5
+            periods_per_year = 31536000.0 / max(cadence_seconds, 1)
+            ann = periods_per_year ** 0.5
+            if std_r > 0:
+                sharpe = (mean_r / std_r) * ann
+            downside = [r for r in returns if r < 0]
+            if downside:
+                d_var = sum(r * r for r in downside) / len(downside)
+                d_std = d_var ** 0.5
+                if d_std > 0:
+                    sortino = (mean_r / d_std) * ann
+
+        # Max drawdown is the worst (most negative) row from value_history,
+        # taken as a positive percentage.
+        max_dd_pct = 0.0
+        for r in history:
+            dd = float(r["drawdown_pct"] or 0.0)
+            if abs(dd) > max_dd_pct:
+                max_dd_pct = abs(dd)
+
+        # Final benchmark value at the most recent history timestamp.
+        bench_values, _ = await self.compute_paper_benchmark_series(
+            portfolio_id=portfolio_id,
+            timestamps=[history[-1]["timestamp"]],
+            initial_capital_tao=initial,
+            exclude_netuids=exclude_netuids,
+            min_pool_depth_tao=min_pool_depth_tao,
+        )
+        bench_current = bench_values[0] if bench_values else initial
+        bench_return = (bench_current - initial) / initial if initial > 0 else 0.0
+        alpha = total_return - bench_return
+
+        return {
+            "portfolio_id": portfolio_id,
+            "mode": portfolio.get("mode", "paper"),
+            "initial_capital_tao": initial,
+            "current_value_tao": current,
+            "total_return_pct": total_return,
+            "benchmark_return_pct": bench_return,
+            "alpha_pct": alpha,
+            "sharpe_ratio": sharpe,
+            "sortino_ratio": sortino,
+            "max_drawdown_pct": max_dd_pct,
+            "cycles": len(history),
+            "cadence_seconds": cadence_seconds,
+            "total_trades": total_trades,
+            "winning_trades": len(winning),
+            "losing_trades": len(losing),
+            "win_rate": win_rate,
+            "avg_win_pct": avg_win_pct,
+            "avg_loss_pct": avg_loss_pct,
+            "profit_factor": profit_factor,
+            "avg_hold_hours": avg_hold_hours,
+        }
 
     async def compute_paper_benchmark_series(
         self,

@@ -18,7 +18,7 @@ OpenTaoAPI: open-source self-hosted Bittensor explorer + API. Positioned as the 
 - Repo: `github.com/ryanmercier/OpenTaoAPI` (MIT)
 - Live hosted demo: `https://opentao.rpmsystems.io` (Fly.io)
 - Project root in WSL: `/home/ryanm/Code/Claude/OpenTaoAPI/`
-- Current version: v0.7.0, 55 routes
+- Current version: v0.8.0, 56 routes
 - Tech: FastAPI + Bittensor SDK (`AsyncSubtensor`) + aiosqlite + vanilla JS frontend + lightweight-charts (vendored). No build step.
 
 ## What's shipped so far

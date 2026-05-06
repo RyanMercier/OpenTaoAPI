@@ -61,7 +61,7 @@ def cmd_info(args) -> int:
         return 1
     counts = loader.get_snapshot_counts()
     lo, hi = loader.get_data_range()
-    print(f"Time range: {lo}  →  {hi}")
+    print(f"Time range: {lo}  ->  {hi}")
     print()
     print(f"{'netuid':>7} {'snapshots':>10} {'first':>26} {'last':>26}")
     for n in netuids:
@@ -203,7 +203,7 @@ def cmd_scan(args) -> int:
             if sig:
                 fired.append(sig)
 
-    print(f"\nSignal scan, latest snapshot per subnet")
+    print("\nSignal scan, latest snapshot per subnet")
     print("-" * 72)
     if not fired:
         print("No active entry signals.")
@@ -242,8 +242,7 @@ def cmd_dashboard(args) -> int:
     with open(args.input, "r") as f:
         data = json.load(f)
 
-    # Rehydrate what the dashboard needs, the BacktestResult dataclass.
-    from .backtester import BacktestResult
+    # Rehydrate just enough of BacktestResult for the dashboard.
     from .models import Trade, Direction, StrategyName
     trades = []
     for t in data.get("trades", []):
@@ -336,6 +335,22 @@ def main() -> int:
     dd.add_argument("--open", action="store_true")
     dd.add_argument("--db", type=str, default=None)
 
+    lv = sub.add_parser("live", help="Start LIVE trading on a paper portfolio")
+    lv.add_argument("--portfolio", type=str, required=True,
+                    help="Portfolio name (must already exist; create via API or paper run first)")
+    lv.add_argument("--wallet", dest="wallet_name", type=str, required=True,
+                    help="Bittensor wallet name on disk (~/.bittensor/wallets/<name>/)")
+    lv.add_argument("--hotkey", dest="hotkey_name", type=str, default="default",
+                    help="Hotkey name on the wallet (default: 'default')")
+    lv.add_argument("--db", type=str, default=None,
+                    help="Path to opentao.db (default: from settings)")
+    lv.add_argument("--poll-interval", dest="poll_interval", type=int, default=None,
+                    help="Override paper_poll_interval_seconds for this run")
+    lv.add_argument("--no-confirm", dest="no_confirm", action="store_true",
+                    help="Skip the [y/N] confirmation prompt before the first trade")
+    lv.add_argument("--dry-run", dest="dry_run", action="store_true",
+                    help="Run the strategy pipeline but skip extrinsic submission")
+
     cmp = sub.add_parser("compare", help="Generate multi-config comparison dashboard")
     cmp.add_argument("--summary", type=str, default="results/compare/summary.json")
     cmp.add_argument("--output", type=str, default="results/comparison_dashboard.html")
@@ -373,7 +388,178 @@ def main() -> int:
         return cmd_compare(args)
     if args.command == "mc":
         return cmd_mc(args)
+    if args.command == "live":
+        return cmd_live(args)
     return 1
+
+
+def cmd_live(args) -> int:
+    """Start the live runner. Loads the wallet locally, prompts for the
+    coldkey password, then loops calling LiveTrader.run_once. Keys never
+    leave this process. Use Ctrl+C to stop."""
+    import asyncio
+    return asyncio.run(_run_live(args))
+
+
+async def _run_live(args) -> int:
+    import asyncio
+    import getpass
+    import json as _json
+
+    from api.config import settings
+    from api.services.cache import TTLCache
+    from api.services.chain_client import ChainClient
+    from api.services.database import Database
+    from api.services.price_client import PriceClient
+
+    db_path = args.db or settings.database_path
+    database = Database(db_path)
+    cache = TTLCache()
+    chain_client = ChainClient(cache)
+    price_client = PriceClient(cache)
+
+    print(f"Opening database: {db_path}")
+    await database.startup()
+    await chain_client.startup()
+    await price_client.startup()
+
+    try:
+        # 1. Look up the portfolio.
+        portfolios = await database.list_paper_portfolios(active_only=False)
+        match = next((p for p in portfolios if p["name"] == args.portfolio), None)
+        if not match:
+            print(f"Portfolio {args.portfolio!r} not found. Create it first via the web UI or API.", file=sys.stderr)
+            return 2
+
+        # 2. Promote (or verify) live mode + persist wallet/hotkey on the row.
+        await database.set_paper_portfolio_mode(
+            match["id"], "live",
+            wallet_name=args.wallet_name,
+            hotkey_name=args.hotkey_name,
+        )
+
+        # 3. Load + unlock the wallet.
+        try:
+            import bittensor_wallet  # type: ignore
+        except ImportError:
+            print("bittensor_wallet not installed. Install with: pip install bittensor", file=sys.stderr)
+            return 3
+        wallet = bittensor_wallet.Wallet(name=args.wallet_name, hotkey=args.hotkey_name)
+        password = getpass.getpass(f"Coldkey password for wallet {args.wallet_name!r}: ")
+        try:
+            # Newer SDKs expose unlock_coldkey(); older ones decrypt on
+            # first .coldkey access. Try both so this works across versions.
+            if hasattr(wallet, "unlock_coldkey"):
+                wallet.unlock_coldkey(password)
+            else:
+                _ = wallet.coldkey
+        except Exception as e:
+            print(f"Failed to unlock coldkey: {e}", file=sys.stderr)
+            return 4
+        ck_addr = wallet.coldkeypub.ss58_address
+        hk_addr = wallet.hotkey.ss58_address
+        print(f"Coldkey: {ck_addr}")
+        print(f"Hotkey:  {hk_addr}")
+
+        # 4. Build the trader.
+        config_dict = _json.loads(match["config_json"]) if match.get("config_json") else {}
+        config = TradingConfig()
+        config.db_path = db_path
+        config.initial_capital_tao = float(match["initial_capital_tao"])
+        for attr in ("strategies", "max_positions", "max_single_position_pct",
+                     "reserve_pct", "max_position_pct_of_pool", "max_slippage_pct",
+                     "num_hotkeys", "external_strategy_paths",
+                     "paper_poll_interval_seconds"):
+            if attr in config_dict and config_dict[attr] is not None:
+                setattr(config, attr, config_dict[attr])
+        if args.poll_interval:
+            config.paper_poll_interval_seconds = int(args.poll_interval)
+
+        from .paper_trader import hydrate_portfolio
+        portfolio = await hydrate_portfolio(database, match["id"], config)
+
+        if args.dry_run:
+            print(">>> DRY RUN: signals will be evaluated but no extrinsics submitted")
+            from .paper_trader import PaperTrader
+            trader = PaperTrader(
+                portfolio_id=match["id"],
+                config=config,
+                portfolio=portfolio,
+                chain_client=chain_client,
+                price_client=price_client,
+                database=database,
+            )
+        else:
+            from .live_trader import LiveTrader
+            trader = LiveTrader(
+                portfolio_id=match["id"],
+                config=config,
+                portfolio=portfolio,
+                chain_client=chain_client,
+                price_client=price_client,
+                database=database,
+                wallet=wallet,
+                hotkey_name=args.hotkey_name,
+            )
+
+        # 5. Confirm.
+        if not args.no_confirm and not args.dry_run:
+            print()
+            print("=" * 60)
+            print("LIVE TRADING CONFIRMATION")
+            print("=" * 60)
+            print(f"Portfolio:     {match['name']} (id={match['id']})")
+            print(f"Capital:       {match['initial_capital_tao']} TAO (allocated)")
+            print(f"Free balance:  {portfolio.free_tao} TAO")
+            print(f"Strategies:    {config.strategies}")
+            print(f"Cadence:       {config.paper_poll_interval_seconds}s")
+            print(f"Daily loss cap:{config.daily_loss_limit_pct * 100:.1f}%")
+            print(f"Max slippage:  {config.max_slippage_pct * 100:.2f}%")
+            print(f"Max pos/pool:  {config.max_position_pct_of_pool * 100:.2f}%")
+            print()
+            print("Real TAO will move on-chain when strategies fire. Ctrl+C to stop.")
+            ans = input("Type 'go' to continue: ").strip().lower()
+            if ans != "go":
+                print("Aborted.")
+                return 5
+
+        print()
+        print(f"Live trader running. Cycle every {config.paper_poll_interval_seconds}s. Ctrl+C to stop.")
+        print()
+
+        # 6. Loop.
+        try:
+            while True:
+                # Check active flag in DB; respect web pause.
+                row = await database.get_paper_portfolio(match["id"])
+                if not row or not row["active"]:
+                    print("Portfolio is paused (active=0). Sleeping 60s before re-check.")
+                    await asyncio.sleep(60)
+                    continue
+                try:
+                    result = await trader.run_once()
+                    print(f"[{datetime.now().isoformat(timespec='seconds')}] cycle: {result}")
+                except Exception as e:
+                    print(f"Cycle error: {e}", file=sys.stderr)
+                await asyncio.sleep(config.paper_poll_interval_seconds)
+        except KeyboardInterrupt:
+            print()
+            print("Stopping. Final state already persisted from last cycle.")
+            return 0
+    finally:
+        try:
+            await chain_client.shutdown()
+        except Exception:
+            pass
+        try:
+            await price_client.shutdown()
+        except Exception:
+            pass
+        try:
+            await database.shutdown()
+        except Exception:
+            pass
+    return 0
 
 
 def cmd_compare(args) -> int:
@@ -401,7 +587,7 @@ def cmd_mc(args) -> int:
             strategies=strategies,
             seed=args.seed,
         )
-        title = f"Bootstrap: {args.runs} runs × {args.window_days}d windows"
+        title = f"Bootstrap: {args.runs} runs x {args.window_days}d windows"
     elif args.mode == "netuids":
         runs = runner.netuid_subsampling(strategies=strategies)
         title = "Netuid subsampling"

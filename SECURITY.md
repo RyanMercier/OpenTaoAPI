@@ -27,7 +27,7 @@ infrastructure they trust. The defaults assume:
   hotkeys, error messages) flow through an `esc()` helper before being
   interpolated into `innerHTML`.
 - **Integer overflow on thresholds.** `WebhookSubscribeRequest.threshold` is
-  bounded to ±1e15 and URLs are capped at 2048 chars.
+  bounded to +/-1e15 and URLs are capped at 2048 chars.
 - **DB write races.** The shared aiosqlite connection is serialized through
   an `asyncio.Lock` on every write path so the poller and webhook evaluator
   cannot interleave transactions.

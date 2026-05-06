@@ -1,9 +1,9 @@
-"""Paper-trading API.
+"""Paper trading routes.
 
-Read endpoints expose the persisted state written by ``_paper_trader_runner``
-in ``api/main.py``. The runner itself is gated by ``PAPER_TRADING_ENABLED``;
-read endpoints work either way so the public hosted demo can show the
-schema and the dashboard.
+Reads return whatever the runner has persisted; writes create or pause
+portfolios. The runner that actually advances cycles is gated by
+``PAPER_TRADING_ENABLED`` so a public instance can host the dashboard
+without running anyone's bot.
 """
 import json
 import logging
@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from api.models.schemas import (
     PaperPortfolio,
     PaperPortfolioCreate,
+    PaperPortfolioStats,
     PaperPosition,
     PaperTrade,
     PaperValueHistory,
@@ -50,6 +51,9 @@ def _row_to_portfolio(row: dict) -> PaperPortfolio:
         initial_capital_tao=row["initial_capital_tao"],
         active=bool(row["active"]),
         created_at=row["created_at"],
+        mode=row.get("mode") or "paper",
+        wallet_name=row.get("wallet_name"),
+        hotkey_name=row.get("hotkey_name"),
         last_cycle_at=row.get("last_cycle_at"),
         free_tao=row.get("free_tao"),
         peak_value=row.get("peak_value"),
@@ -129,6 +133,8 @@ async def get_paper_portfolio(portfolio_id: int):
 async def get_paper_positions(portfolio_id: int):
     if not _db:
         raise HTTPException(status_code=503, detail="Database not available")
+    if not await _db.get_paper_portfolio(portfolio_id):
+        raise HTTPException(status_code=404, detail="Paper portfolio not found")
     rows = await _db.list_paper_positions(portfolio_id)
     return [PaperPosition(**r) for r in rows]
 
@@ -142,6 +148,8 @@ async def get_paper_trades(portfolio_id: int, limit: int = 200):
         raise HTTPException(status_code=503, detail="Database not available")
     if limit < 1 or limit > 5000:
         raise HTTPException(status_code=400, detail="limit out of range (1..5000)")
+    if not await _db.get_paper_portfolio(portfolio_id):
+        raise HTTPException(status_code=404, detail="Paper portfolio not found")
     rows = await _db.list_paper_trades(portfolio_id, limit=limit)
     return [PaperTrade(**r) for r in rows]
 
@@ -158,16 +166,19 @@ async def get_paper_history(
     if hours < 1 or hours > 8760:
         raise HTTPException(status_code=400, detail="hours out of range")
 
+    portfolio_row = await _db.get_paper_portfolio(portfolio_id)
+    if not portfolio_row:
+        raise HTTPException(status_code=404, detail="Paper portfolio not found")
+
     rows = await _db.get_paper_value_history(portfolio_id, hours=hours, limit=limit)
     if not rows:
         return PaperValueHistory(portfolio_id=portfolio_id, hours=hours, points=[])
 
     # Pull the portfolio's universe filter from its stored config so the
     # benchmark mirrors what the trader could have traded.
-    portfolio_row = await _db.get_paper_portfolio(portfolio_id)
-    initial_capital_tao = float(portfolio_row["initial_capital_tao"]) if portfolio_row else 100.0
+    initial_capital_tao = float(portfolio_row["initial_capital_tao"])
     config = {}
-    if portfolio_row and portfolio_row.get("config_json"):
+    if portfolio_row.get("config_json"):
         try:
             config = json.loads(portfolio_row["config_json"])
         except Exception:
@@ -204,6 +215,39 @@ async def get_paper_history(
         benchmark_universe=universe,
         benchmark_anchor_timestamp=anchor_ts,
     )
+
+
+@router.get(
+    "/paper/portfolios/{portfolio_id}/stats",
+    response_model=PaperPortfolioStats,
+    summary="Headline metrics: Sharpe, win rate, drawdown, return vs benchmark",
+)
+async def get_paper_stats(portfolio_id: int):
+    if not _db:
+        raise HTTPException(status_code=503, detail="Database not available")
+    portfolio_row = await _db.get_paper_portfolio(portfolio_id)
+    if not portfolio_row:
+        raise HTTPException(status_code=404, detail="Paper portfolio not found")
+
+    config = {}
+    if portfolio_row.get("config_json"):
+        try:
+            config = json.loads(portfolio_row["config_json"])
+        except Exception:
+            config = {}
+    cadence = int(config.get("paper_poll_interval_seconds") or 1800)
+    exclude = config.get("exclude_netuids") or [0]
+    min_depth = float(config.get("min_pool_depth_tao") or 50.0)
+
+    stats = await _db.compute_paper_portfolio_stats(
+        portfolio_id,
+        cadence_seconds=cadence,
+        exclude_netuids=exclude,
+        min_pool_depth_tao=min_depth,
+    )
+    if stats is None:
+        raise HTTPException(status_code=404, detail="Paper portfolio not found")
+    return PaperPortfolioStats(**stats)
 
 
 @router.post("/paper/portfolios/{portfolio_id}/pause")

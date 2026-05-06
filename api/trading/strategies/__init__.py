@@ -1,20 +1,13 @@
 """Strategy plugin registry.
 
-Built-in strategies live in this package. Operators can register their own
-by either dropping a file into this directory and importing it, or by
-pointing the ``OPENTAO_EXTERNAL_STRATEGIES`` env var at a directory or
-single ``.py`` file. Each strategy must:
+Built-in strategies live in this package. To register your own, subclass
+``Strategy`` and decorate it with ``@register_strategy("your_key")``. Drop
+the file into this directory or point ``OPENTAO_EXTERNAL_STRATEGIES`` at
+its location.
 
-  1. Subclass ``Strategy`` from ``api.trading.strategies.base``.
-  2. Decorate the class with ``@register_strategy("<key>")``.
-
-The decorator populates ``STRATEGIES`` so the runner, the API, and the UI
-can discover them by name.
-
-Cut from the original TaoTrader release: ``timesfm``, ``combo``, and the
-proprietary ``stmc`` / ``vstmc`` / ``xstmc`` momentum strategies. Operators
-running the proprietary set keep it private and load it via the
-external-strategy path.
+The runner, the API, and the UI all discover strategies by reading
+``STRATEGIES``, so anything you register here is immediately pickable from
+the paper-trading create form.
 """
 
 from __future__ import annotations
@@ -36,10 +29,9 @@ STRATEGY_SOURCES: dict[str, str] = {}  # key -> "builtin" or "external:<path>"
 
 
 def register_strategy(key: str, *, source: str = "builtin"):
-    """Class decorator. ``@register_strategy("mean_reversion")`` adds the
-    decorated class to the global registry. Re-registering the same key
-    replaces the previous entry; sources differing across registrations
-    are logged as warnings."""
+    """Add a Strategy subclass to ``STRATEGIES`` under ``key``. Re-using
+    the same key overwrites the prior entry; if the source changed we log
+    a warning so collisions don't silently replace each other."""
     def deco(cls: Type[Strategy]) -> Type[Strategy]:
         prev = STRATEGY_SOURCES.get(key)
         if prev is not None and prev != source:
@@ -73,9 +65,10 @@ def list_strategies() -> list[dict]:
 
 
 def load_external_strategies(paths_env: str | None = None) -> int:
-    """Import strategy modules from a colon-separated list (env var by
-    default). Each entry can be a directory (every non-underscore ``*.py``
-    file is imported) or a single ``.py`` file. Returns the file count."""
+    """Import strategy files listed in ``OPENTAO_EXTERNAL_STRATEGIES`` (or
+    the explicit ``paths_env`` argument). Entries are colon-separated; each
+    can be a single ``.py`` file or a directory whose ``*.py`` files are
+    imported in order. Returns the number of files loaded."""
     raw = paths_env if paths_env is not None else os.environ.get(
         "OPENTAO_EXTERNAL_STRATEGIES", ""
     )
@@ -103,8 +96,8 @@ def load_external_strategies(paths_env: str | None = None) -> int:
 
 
 def _import_external_file(path: Path) -> None:
-    """Import a strategy file by path. Any keys it registers get retagged
-    with the file path as their source so the API can show provenance."""
+    """Import a single strategy file. Anything it registers gets the file
+    path tagged as its source so the UI can show provenance."""
     pre_keys = set(STRATEGIES)
     spec = importlib.util.spec_from_file_location(
         f"opentao_external.{path.stem}", path
@@ -119,13 +112,8 @@ def _import_external_file(path: Path) -> None:
         STRATEGY_SOURCES[key] = f"external:{path}"
 
 
-# Import built-ins last so their ``@register_strategy`` calls work.
-from . import drain_detector   # noqa: E402,F401
-from . import mean_reversion   # noqa: E402,F401
-from . import momentum         # noqa: E402,F401
-from . import stake_velocity   # noqa: E402,F401
-
-# Class re-exports for callers that prefer importing types directly.
+# Built-in imports run last so their @register_strategy decorators see
+# the symbols defined above.
 from .drain_detector import DrainDetector              # noqa: E402,F401
 from .mean_reversion import MeanReversionStrategy      # noqa: E402,F401
 from .momentum import MomentumStrategy                  # noqa: E402,F401

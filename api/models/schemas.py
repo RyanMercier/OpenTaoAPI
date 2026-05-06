@@ -251,6 +251,9 @@ class PaperPortfolio(BaseModel):
     initial_capital_tao: float
     active: bool
     created_at: str
+    mode: str = "paper"
+    wallet_name: str | None = None
+    hotkey_name: str | None = None
     last_cycle_at: str | None = None
     free_tao: float | None = None
     peak_value: float | None = None
@@ -288,6 +291,31 @@ class PaperTrade(BaseModel):
     pnl_pct: float | None = None
     hold_duration_hours: float | None = None
     entry_strategy: str | None = None
+    extrinsic_hash: str | None = None
+    executed_block: int | None = None
+
+
+class PaperPortfolioStats(BaseModel):
+    portfolio_id: int
+    mode: str = "paper"
+    initial_capital_tao: float
+    current_value_tao: float
+    total_return_pct: float
+    benchmark_return_pct: float
+    alpha_pct: float
+    sharpe_ratio: float
+    sortino_ratio: float
+    max_drawdown_pct: float
+    cycles: int
+    cadence_seconds: int
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: float
+    avg_win_pct: float
+    avg_loss_pct: float
+    profit_factor: float | None = None
+    avg_hold_hours: float
 
 
 class PaperValuePoint(BaseModel):

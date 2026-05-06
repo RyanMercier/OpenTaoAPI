@@ -7,7 +7,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from .models import Direction, Position, Snapshot
+from .models import Direction, Snapshot
 from .portfolio import PortfolioTracker
 
 if TYPE_CHECKING:
@@ -19,7 +19,7 @@ def print_backtest_report(result: "BacktestResult") -> None:
     print("=" * 72)
     print("BITTENSOR SUBNET TRADING, BACKTEST REPORT")
     print("=" * 72)
-    print(f"Time range:      {result.start_time}  →  {result.end_time}")
+    print(f"Time range:      {result.start_time}  ->  {result.end_time}")
     print(f"Initial capital: {result.initial_capital:.2f} TAO")
     print(f"Strategies:      {', '.join(result.strategies_used)}")
     if result.regime_filter:

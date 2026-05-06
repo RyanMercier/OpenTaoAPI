@@ -1,24 +1,19 @@
-"""Live paper trading inside the OpenTaoAPI process.
+"""Paper-trading runner.
 
-Each cycle:
-  1. Pulls the current state of every active subnet from ``chain_client``
-     (in-process, cached, the same source the live poller uses).
-  2. Loads recent snapshot history from ``subnet_snapshots`` for feature
-     computation. No HTTP, no SSE thread, no separate process.
-  3. Runs the configured strategies, executes buys/sells against the AMM
-     math, and persists trades + value-history rows to SQLite.
+One ``PaperTrader`` per portfolio, kept alive by the FastAPI lifespan
+task. Each cycle: load recent snapshots, compute features, run the
+configured strategies, simulate buys and sells against the AMM math,
+write trades and a value-history row to SQLite.
 
-Per-portfolio state lives in ``paper_portfolios`` / ``paper_positions`` /
-``paper_trades`` / ``paper_value_history``. ``PortfolioTracker`` stays an
-in-memory object the runner hydrates from those tables once and updates
-in place; persistence is incremental (one trade row per execute, one
-value-history row per cycle).
+State lives in ``paper_portfolios`` / ``paper_positions`` / ``paper_trades``
+/ ``paper_value_history``. ``PortfolioTracker`` is in-memory and gets
+rehydrated from those tables on startup; persistence is incremental so a
+crash mid-cycle loses at most the trades from that cycle.
 """
 from __future__ import annotations
 
 import json
 import logging
-import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
@@ -26,7 +21,6 @@ from typing import Optional
 from .config import TradingConfig
 from .features import FeatureEngine
 from .models import (
-    Direction,
     Features,
     Position,
     Signal,
@@ -155,7 +149,7 @@ class PaperTrader:
                 -s.strength,
             )
         )
-        executed_trades: list[Trade] = []
+        executed: list[tuple[Trade, dict]] = []
         exited = set()
         for sig in exits:
             if sig.netuid in exited or sig.netuid not in self.portfolio.positions:
@@ -170,11 +164,11 @@ class PaperTrader:
             )
             if snap.block < cooldown_end:
                 continue
-            trade = self.portfolio.execute_sell(
+            trade, meta = await self._execute_sell(
                 sig.netuid, snap, sig.reason, sig.strategy
             )
             if trade is not None:
-                executed_trades.append(trade)
+                executed.append((trade, meta))
                 exited.add(sig.netuid)
 
         entries.sort(key=lambda s: -s.strength)
@@ -190,15 +184,19 @@ class PaperTrader:
             hotkey = self.portfolio.get_available_hotkey(snap.block)
             if hotkey is None:
                 continue
-            trade = self.portfolio.execute_buy(sig, amount, snap, hotkey)
+            trade, meta = await self._execute_buy(sig, amount, snap, hotkey)
             if trade is not None:
-                executed_trades.append(trade)
+                executed.append((trade, meta))
                 state = self.portfolio.get_state(now, current_snaps)
 
         # Persist: trades first, then a single value-history row, then
         # current open positions so the table reflects reality.
-        for trade in executed_trades:
-            await self.database.insert_paper_trade(self.portfolio_id, trade)
+        for trade, meta in executed:
+            await self.database.insert_paper_trade(
+                self.portfolio_id, trade,
+                extrinsic_hash=meta.get("extrinsic_hash"),
+                executed_block=meta.get("executed_block"),
+            )
         await self.database.replace_paper_positions(
             self.portfolio_id, self.portfolio.positions
         )
@@ -220,20 +218,28 @@ class PaperTrader:
         )
 
         return {
-            "trades": len(executed_trades),
+            "trades": len(executed),
             "open_positions": len(self.portfolio.positions),
             "value_tao": state.total_value_tao,
             "pnl_pct": state.total_pnl_pct,
         }
 
-    # -- snapshot history ------------------------------------------------
+    # Execute hooks. LiveTrader overrides these to submit real
+    # extrinsics; the meta dict carries the on-chain fields when present.
+
+    async def _execute_buy(self, signal, amount, snapshot, hotkey_id):
+        trade = self.portfolio.execute_buy(signal, amount, snapshot, hotkey_id)
+        return trade, {}
+
+    async def _execute_sell(self, netuid, snapshot, reason, strategy):
+        trade = self.portfolio.execute_sell(netuid, snapshot, reason, strategy)
+        return trade, {}
 
     async def _load_history(self) -> dict[int, list[Snapshot]]:
-        """Pull the last N hours of subnet snapshots straight from
-        ``subnet_snapshots``. Cheap because it's the same SQLite the
-        poller is writing to; we hit at most a few MB per cycle."""
-        # Pick a window long enough for the longest feature lookback. The
-        # 30-day z-score window needs ~1440 snapshots at 30 min cadence.
+        """Pull recent subnet snapshots from the same SQLite the live
+        poller writes to. The window has to cover the longest feature
+        lookback we use; at 30-min cadence, the 30-day z-score needs
+        ~1440 rows per subnet."""
         hours = max(720, self.config.mr_zscore_window_hours * 5)
         rows_by_netuid = await self.database.load_recent_snapshots(hours=hours)
         history: dict[int, list[Snapshot]] = defaultdict(list)
@@ -271,11 +277,10 @@ def _parse_ts(s: str) -> datetime:
 
 
 async def hydrate_portfolio(database, portfolio_id: int, config: TradingConfig) -> PortfolioTracker:
-    """Build a PortfolioTracker from saved DB state. Sets free_tao,
-    peak_value, hotkey_cooldowns, and replays open positions. Trades are
-    not loaded into memory (they live in the DB and are queried for
-    reporting); ``num_trades`` is derived from a COUNT query when needed.
-    """
+    """Build a fresh PortfolioTracker from the DB. Loads runtime fields
+    (free_tao, peak_value, hotkey_cooldowns) and open positions. Trades
+    stay in the DB and are queried for reporting; we don't pull the full
+    log into memory."""
     portfolio = PortfolioTracker(config)
     runtime = await database.get_paper_portfolio_runtime(portfolio_id)
     if runtime:
@@ -310,9 +315,9 @@ async def hydrate_portfolio(database, portfolio_id: int, config: TradingConfig) 
 
 
 def _strategy_from_value(value: str) -> StrategyName:
-    """Map a stored string back to a StrategyName, falling back to
-    ``EXTERNAL`` for plug-in strategies. Trade rows keep the original
-    string in their own column so external attribution survives."""
+    """Map a stored string back to a StrategyName. External keys fall
+    back to ``EXTERNAL``; their original string is kept in the trade row
+    for attribution."""
     try:
         return StrategyName(value)
     except ValueError:

@@ -433,7 +433,7 @@ def generate_backtest_dashboard(
 </head>
 <body>
 <h1>Bittensor Subnet Trading, Backtest Dashboard</h1>
-<p style="color:#888">{{summary.start_time}} → {{summary.end_time}} · strategies: {{summary.strategies}}</p>
+<p style="color:#888">{{summary.start_time}} -> {{summary.end_time}} · strategies: {{summary.strategies}}</p>
 
 <div class="banner">
   <div>
@@ -486,7 +486,7 @@ def generate_backtest_dashboard(
 
 <div class="cols2">
   <div class="chart-container">
-    <h2>Entry → Exit Attribution</h2>
+    <h2>Entry -> Exit Attribution</h2>
     <div id="eeMatrix"></div>
     <p style="color:#888;font-size:12px;margin-top:8px">
       Row = strategy that opened the position. Column = strategy that closed it.
@@ -523,7 +523,7 @@ function renderBanner() {{
     ` over ${{Math.round(durationDays())}}d  (annualized ${{(s.annualized_return_pct*100).toFixed(1)}}%, Sharpe ${{s.sharpe.toFixed(2)}})`;
   const alphaClass = alpha >= 0 ? 'good' : 'bad';
   document.getElementById('bannerSub').innerHTML =
-    `vs equal-weight B&amp;H ${{bnh}}  →  <span class="${{alphaClass}}">alpha ${{alphaStr}}</span>` +
+    `vs equal-weight B&amp;H ${{bnh}}  ->  <span class="${{alphaClass}}">alpha ${{alphaStr}}</span>` +
     ` · max DD ${{pct(s.max_drawdown_pct)}} · ${{s.total_trades}} trades, ${{pct(s.win_rate)}} win rate`;
   const strats = (s.strategies || []).filter(x => x !== 'drain_exit').join(',');
   const hk = s.num_hotkeys || 2;
@@ -636,7 +636,7 @@ function renderEquity() {{
                 const ix = ctx.dataIndex;
                 const src = ctx.dataset.label === 'Buys' ? buys[ix] : sells[ix];
                 const pnl = src.pnl_pct != null ? ` pnl ${{(src.pnl_pct*100).toFixed(2)}}%` : '';
-                const entry = src.entry_strategy ? `${{src.entry_strategy}}→${{src.strategy}}` : src.strategy;
+                const entry = src.entry_strategy ? `${{src.entry_strategy}}->${{src.strategy}}` : src.strategy;
                 return `${{ctx.dataset.label}} SN${{src.netuid}} [${{entry}}] slip ${{(src.slip*100).toFixed(3)}}%${{pnl}}`;
               }}
               return `${{ctx.dataset.label}}: ${{ctx.parsed.y.toFixed(3)}} TAO`;

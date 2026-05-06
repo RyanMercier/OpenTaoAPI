@@ -1,10 +1,6 @@
-"""Shared portfolio computation used by both the live route and the
-background wallet poller.
-
-The original logic lived in ``api/routes/portfolio.py`` as the
-``get_portfolio`` handler. Pulling it out so the poller can reuse it
-without going through HTTP. The route is now a thin wrapper.
-"""
+"""Shared portfolio computation. Used by the live ``/portfolio/{coldkey}``
+route and by the background wallet poller, so both paths see exactly the
+same numbers."""
 import asyncio
 import logging
 from collections import defaultdict
@@ -24,15 +20,14 @@ async def compute_portfolio(
     price_client: PriceClient,
     coldkey: str,
 ) -> Tuple[PortfolioResponse, int]:
-    """Build a full cross-subnet portfolio for a coldkey.
+    """Build a cross-subnet portfolio for a coldkey.
 
-    Returns ``(PortfolioResponse, current_block)``. The block is captured
-    in the same gather so a snapshot row can be keyed against it; without
-    it the poller would have to do a second RPC just to know what block
-    the data corresponds to.
+    Returns ``(PortfolioResponse, current_block)``. We grab the block in
+    the same gather so the wallet poller can key its snapshot row against
+    it without a second RPC.
 
-    Raises ``RuntimeError`` if the initial chain calls fail; callers should
-    map that to a 502 (route) or skip the cycle (poller).
+    Raises ``RuntimeError`` on chain-call failure; the route maps that to
+    502, the poller skips the cycle.
     """
     try:
         balance, stakes, tao_price, current_block = await asyncio.gather(

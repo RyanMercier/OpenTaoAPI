@@ -307,18 +307,16 @@ WALLET_BACKOFF_CAP_SECONDS = 1800   # 30 min cap
 
 
 async def _wallet_poller():
-    """Periodically refresh tracked wallets and append portfolio snapshots.
+    """Walk the ``tracked_wallets`` table on a slow tick and snapshot any
+    wallet whose interval has elapsed. One row in
+    ``wallet_portfolio_snapshots`` per cycle per wallet. Errors on a
+    single wallet are caught and logged; the supervisor only restarts if
+    the loop itself crashes.
 
-    Iterates the ``tracked_wallets`` table on a slow tick and, for each
-    wallet whose ``poll_interval_seconds`` has elapsed, computes a fresh
-    portfolio and writes one ``wallet_portfolio_snapshots`` row. Errors
-    on a single wallet do not stop the loop; the supervisor restarts the
-    whole task only if the loop itself crashes.
-
-    Per-wallet exponential backoff after consecutive failures keeps a
-    flaky chain RPC from producing a traceback every cycle. Expected
-    failures (chain timeouts, transient substrate-interface KeyErrors)
-    log as one-line warnings; only unexpected exceptions get tracebacks.
+    Per-wallet exponential backoff stops a flaky chain from producing a
+    traceback every minute. Expected failures (timeouts, transient
+    substrate-interface KeyErrors) print a one-liner; unexpected
+    exceptions still get a full traceback.
     """
     logger.info(
         "Wallet poller started (tick %ds, default per-wallet 5min)",
@@ -339,8 +337,7 @@ async def _wallet_poller():
         for wallet in due:
             coldkey = wallet["coldkey_ss58"]
 
-            # Per-wallet backoff: skip if we recently failed and the penalty
-            # window hasn't elapsed.
+            # Skip if a prior failure has us in the penalty window.
             backoff = _wallet_backoff.get(coldkey)
             if backoff and now_ts < backoff["resume_at"]:
                 continue
@@ -351,10 +348,8 @@ async def _wallet_poller():
                     timeout=WALLET_POLL_TIMEOUT_SECONDS,
                 )
             except (asyncio.TimeoutError, RuntimeError) as e:
-                # Chain RPC timeout or compute_portfolio's wrapped chain
-                # error: expected on a flaky public RPC. One-line warning,
-                # no traceback. Apply exponential backoff so we stop
-                # hammering when the chain is unhappy.
+                # Expected: chain RPC timed out, or compute_portfolio
+                # wrapped a chain failure. One warning line, back off.
                 _bump_wallet_backoff(coldkey, now_ts)
                 resume_in = int(_wallet_backoff[coldkey]["resume_at"] - now_ts)
                 reason = "timeout" if isinstance(e, asyncio.TimeoutError) else f"chain error ({e})"
@@ -368,7 +363,7 @@ async def _wallet_poller():
             except asyncio.CancelledError:
                 raise
             except Exception:
-                # Genuinely unexpected: keep the traceback.
+                # Unexpected: full traceback so we can debug.
                 _bump_wallet_backoff(coldkey, now_ts)
                 logger.exception(
                     "Wallet poller: unexpected error for %s", coldkey
@@ -376,7 +371,6 @@ async def _wallet_poller():
                 await database.mark_wallet_polled(coldkey, now_iso)
                 continue
 
-            # Success: clear any backoff state.
             _wallet_backoff.pop(coldkey, None)
 
             row = {
@@ -426,21 +420,16 @@ _paper_traders: dict = {}  # portfolio_id -> PaperTrader instance
 
 
 async def _paper_trader_runner():
-    """Advance every active paper portfolio one cycle on a slow tick.
-
-    Each portfolio has its own ``poll_interval_seconds``; we sleep on the
-    GCD-ish minimum across portfolios but never under 60s. State is
-    rehydrated lazily into ``_paper_traders`` so a restart picks up where
-    the previous process left off.
-    """
+    """Advance every active paper portfolio one cycle when its interval
+    elapses. ``_paper_traders`` keeps trader instances alive between
+    cycles so position state and strategy internal counters survive."""
     if not settings.paper_trading_enabled:
         logger.info("Paper trader disabled (PAPER_TRADING_ENABLED=false)")
         return
 
-    # Lazy imports keep the trading package off the import path on
-    # instances that don't run paper trading.
+    # Lazy import: a paper-trading-disabled instance shouldn't pay the
+    # cost of importing the trading package at startup.
     import json as _json
-    from api.trading.config import TradingConfig
     from api.trading.paper_trader import PaperTrader, hydrate_portfolio
     from api.trading.strategies import load_external_strategies
 
@@ -460,7 +449,7 @@ async def _paper_trader_runner():
             continue
 
         now_ts = time.time()
-        next_due_in = 600.0  # default sleep cap if nothing is due
+        next_due_in = 600.0  # max time to sleep when nothing is due
 
         for row in portfolios:
             pid = row["id"]
@@ -472,7 +461,6 @@ async def _paper_trader_runner():
 
             interval = int(cfg_dict.get("paper_poll_interval_seconds", 1800))
 
-            # Skip if not yet due.
             last = row.get("last_cycle_at")
             if last:
                 try:
@@ -484,7 +472,6 @@ async def _paper_trader_runner():
                     next_due_in = min(next_due_in, max(60.0, interval - age))
                     continue
 
-            # Build / fetch the trader.
             trader = _paper_traders.get(pid)
             if trader is None:
                 config = _build_trading_config(cfg_dict, row)
@@ -544,8 +531,9 @@ async def _paper_trader_runner():
 
 
 def _build_trading_config(cfg_dict: dict, portfolio_row: dict):
-    """Construct a TradingConfig from a portfolio's stored config plus
-    fixed defaults from the global trading config."""
+    """Build a TradingConfig from a portfolio row plus its stored
+    ``config_json``. Defaults come from the dataclass; per-portfolio
+    overrides win."""
     from api.trading.config import TradingConfig
     config = TradingConfig()
     config.db_path = settings.database_path
@@ -648,7 +636,7 @@ app = FastAPI(
         "then `python -m scripts.backfill_prices` to fill TAO/USD on old rows.\n\n"
         "**Source:** [github.com/ryanmercier/OpenTaoAPI](https://github.com/ryanmercier/OpenTaoAPI)"
     ),
-    version="0.7.0",
+    version="0.8.0",
     lifespan=lifespan,
     openapi_tags=[
         {"name": "health", "description": "Liveness + poller freshness probe"},
@@ -696,7 +684,7 @@ async def health() -> Response:
     """Liveness + freshness check. Returns **503** when ``stale`` is true,
     so Kubernetes liveness probes and Docker health checks restart the
     container automatically. ``stale`` flips true when the poller has not
-    inserted a row within 2× its expected interval."""
+    inserted a row within 2x its expected interval."""
     snapshots = await database.get_snapshot_count()
     now = time.time()
     age_seconds = now - _poll_state["last_success"] if _poll_state["last_success"] else None
