@@ -11,10 +11,12 @@ venv/
 env/
 .DS_Store
 Thumbs.db
-.claude/
 *.egg-info/
 dist/
 build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Stray temp scripts.
+.tmp_*
