@@ -582,10 +582,6 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 
 TaoMarketCap and tao.app are further along on breadth (stake transfers, holder analytics, block-level data). The point of OpenTaoAPI isn't to win that race; it's to be the **only** option you can run on your own box with webhooks and SSE baked in. If you need deep historical flow analysis right now, use tao.app. If you need a reliable, self-hosted, integration-friendly API that will never lock you out or change terms, self-host this.
 
-## Hosted demo
-
-A public demo is planned; see `docs/deploy-fly.md` for the one-command Fly deployment. In the meantime, `docker compose up -d` or the `conda` path in [Quick Start](#quick-start) gets you a local instance in under a minute. The demo is there to evaluate the API shape quickly; for anything beyond light testing please self-host.
-
 ## Support
 
 If this project is useful to you, consider supporting development:
