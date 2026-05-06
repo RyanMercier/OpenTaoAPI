@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     history_poll_netuids: str = ""  # comma-separated, empty = all active
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # Paper trading runner. Default off so the public hosted demo
+    # doesn't run someone's bot uninvited; flip to true on self-hosted
+    # instances that should advance their paper portfolios.
+    paper_trading_enabled: bool = False
+    # Colon-separated paths to user-defined strategy files/directories.
+    # Same shape as OPENTAO_EXTERNAL_STRATEGIES env var.
+    opentao_external_strategies: str = ""
 
 
 settings = Settings()

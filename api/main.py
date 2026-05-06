@@ -33,6 +33,7 @@ from api.routes.stream import router as stream_router, init_stream_router
 from api.routes.webhooks import router as webhooks_router, init_webhooks_router
 from api.routes.embed import router as embed_router, init_embed_router
 from api.routes.backfill import router as backfill_router, init_backfill_router
+from api.routes.paper import router as paper_router, init_paper_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -419,6 +420,162 @@ async def _wallet_poller_supervisor():
             await asyncio.sleep(5)
 
 
+# --- Paper trading runner -------------------------------------------------
+
+_paper_traders: dict = {}  # portfolio_id -> PaperTrader instance
+
+
+async def _paper_trader_runner():
+    """Advance every active paper portfolio one cycle on a slow tick.
+
+    Each portfolio has its own ``poll_interval_seconds``; we sleep on the
+    GCD-ish minimum across portfolios but never under 60s. State is
+    rehydrated lazily into ``_paper_traders`` so a restart picks up where
+    the previous process left off.
+    """
+    if not settings.paper_trading_enabled:
+        logger.info("Paper trader disabled (PAPER_TRADING_ENABLED=false)")
+        return
+
+    # Lazy imports keep the trading package off the import path on
+    # instances that don't run paper trading.
+    import json as _json
+    from api.trading.config import TradingConfig
+    from api.trading.paper_trader import PaperTrader, hydrate_portfolio
+    from api.trading.strategies import load_external_strategies
+
+    if settings.opentao_external_strategies:
+        load_external_strategies(settings.opentao_external_strategies)
+
+    logger.info("Paper trader runner started")
+
+    while True:
+        try:
+            portfolios = await database.list_paper_portfolios(active_only=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Paper trader: failed to load portfolios")
+            await asyncio.sleep(60)
+            continue
+
+        now_ts = time.time()
+        next_due_in = 600.0  # default sleep cap if nothing is due
+
+        for row in portfolios:
+            pid = row["id"]
+            cfg_dict = {}
+            try:
+                cfg_dict = _json.loads(row["config_json"])
+            except Exception:
+                logger.warning("Paper portfolio %d has unparseable config_json", pid)
+
+            interval = int(cfg_dict.get("paper_poll_interval_seconds", 1800))
+
+            # Skip if not yet due.
+            last = row.get("last_cycle_at")
+            if last:
+                try:
+                    last_ts = datetime.fromisoformat(last).timestamp()
+                except Exception:
+                    last_ts = 0.0
+                age = now_ts - last_ts
+                if age < interval:
+                    next_due_in = min(next_due_in, max(60.0, interval - age))
+                    continue
+
+            # Build / fetch the trader.
+            trader = _paper_traders.get(pid)
+            if trader is None:
+                config = _build_trading_config(cfg_dict, row)
+                portfolio = await hydrate_portfolio(database, pid, config)
+                trader = PaperTrader(
+                    portfolio_id=pid,
+                    config=config,
+                    portfolio=portfolio,
+                    chain_client=chain_client,
+                    price_client=price_client,
+                    database=database,
+                )
+                _paper_traders[pid] = trader
+
+            try:
+                result = await asyncio.wait_for(trader.run_once(), timeout=180)
+                logger.info(
+                    "Paper portfolio %d cycle: %s", pid, result
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Paper portfolio %d cycle timed out", pid)
+                # Advance last_cycle_at so we don't hot-loop.
+                await database.update_paper_portfolio_runtime(
+                    pid,
+                    peak_value=trader.portfolio.peak_value,
+                    free_tao=trader.portfolio.free_tao,
+                    hotkey_cooldowns=trader.portfolio.hotkey_cooldowns,
+                    last_cycle_at=datetime.now(timezone.utc).isoformat(),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Paper portfolio %d cycle failed", pid)
+                # Mark cycled so we back off.
+                try:
+                    await database.update_paper_portfolio_runtime(
+                        pid,
+                        peak_value=trader.portfolio.peak_value,
+                        free_tao=trader.portfolio.free_tao,
+                        hotkey_cooldowns=trader.portfolio.hotkey_cooldowns,
+                        last_cycle_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Paper portfolio %d: also failed to update last_cycle_at", pid
+                    )
+
+            next_due_in = min(next_due_in, float(interval))
+
+        # Drop traders for portfolios that are no longer active.
+        active_ids = {p["id"] for p in portfolios}
+        for stale_id in list(_paper_traders):
+            if stale_id not in active_ids:
+                _paper_traders.pop(stale_id, None)
+
+        await asyncio.sleep(max(60.0, min(next_due_in, 600.0)))
+
+
+def _build_trading_config(cfg_dict: dict, portfolio_row: dict):
+    """Construct a TradingConfig from a portfolio's stored config plus
+    fixed defaults from the global trading config."""
+    from api.trading.config import TradingConfig
+    config = TradingConfig()
+    config.db_path = settings.database_path
+    config.initial_capital_tao = float(
+        portfolio_row.get("initial_capital_tao", config.initial_capital_tao)
+    )
+    for attr in (
+        "strategies", "max_positions", "max_single_position_pct",
+        "reserve_pct", "max_position_pct_of_pool", "max_slippage_pct",
+        "num_hotkeys", "external_strategy_paths",
+        "paper_poll_interval_seconds",
+    ):
+        if attr in cfg_dict and cfg_dict[attr] is not None:
+            setattr(config, attr, cfg_dict[attr])
+    return config
+
+
+async def _paper_trader_supervisor():
+    while True:
+        try:
+            await _paper_trader_runner()
+            logger.info("Paper trader runner exited cleanly; supervisor stopping")
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Paper trader runner crashed; restarting in 30s")
+            await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await chain_client.startup()
@@ -437,6 +594,7 @@ async def lifespan(app: FastAPI):
     init_webhooks_router(database)
     init_embed_router(database)
     init_backfill_router(backfill_jobs)
+    init_paper_router(database)
 
     # Initial snapshot populates the DB before serving requests.
     try:
@@ -449,12 +607,13 @@ async def lifespan(app: FastAPI):
     poller_task = asyncio.create_task(_poller_supervisor())
     evaluator_task = asyncio.create_task(_webhook_evaluator_supervisor())
     wallet_task = asyncio.create_task(_wallet_poller_supervisor())
+    paper_task = asyncio.create_task(_paper_trader_supervisor())
 
     yield
 
-    for task in (poller_task, evaluator_task, wallet_task):
+    for task in (poller_task, evaluator_task, wallet_task, paper_task):
         task.cancel()
-    for task in (poller_task, evaluator_task, wallet_task):
+    for task in (poller_task, evaluator_task, wallet_task, paper_task):
         try:
             await task
         except asyncio.CancelledError:
@@ -489,7 +648,7 @@ app = FastAPI(
         "then `python -m scripts.backfill_prices` to fill TAO/USD on old rows.\n\n"
         "**Source:** [github.com/ryanmercier/OpenTaoAPI](https://github.com/ryanmercier/OpenTaoAPI)"
     ),
-    version="0.6.0",
+    version="0.7.0",
     lifespan=lifespan,
     openapi_tags=[
         {"name": "health", "description": "Liveness + poller freshness probe"},
@@ -522,6 +681,7 @@ app.include_router(subnet_router, prefix="/api/v1")
 app.include_router(emissions_router, prefix="/api/v1")
 app.include_router(portfolio_router, prefix="/api/v1")
 app.include_router(wallets_router, prefix="/api/v1")
+app.include_router(paper_router, prefix="/api/v1")
 app.include_router(history_router, prefix="/api/v1")
 app.include_router(stream_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
@@ -609,6 +769,16 @@ async def webhooks_page():
 @app.get("/wallets", include_in_schema=False)
 async def wallets_page():
     return FileResponse(FRONTEND_DIR / "wallets.html")
+
+
+@app.get("/paper", include_in_schema=False)
+async def paper_index_page():
+    return FileResponse(FRONTEND_DIR / "paper.html")
+
+
+@app.get("/paper/{portfolio_id}", include_in_schema=False)
+async def paper_detail_page(portfolio_id: int):
+    return FileResponse(FRONTEND_DIR / "paper.html")
 
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -78,6 +79,76 @@ CREATE TABLE IF NOT EXISTS wallet_portfolio_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_wallet_snapshots_coldkey_ts
     ON wallet_portfolio_snapshots(coldkey_ss58, timestamp);
+
+-- Paper trading -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS paper_portfolios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    initial_capital_tao REAL NOT NULL,
+    config_json TEXT NOT NULL,                -- TradingConfig serialized
+    created_at TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    -- Runtime state, updated each cycle so a restart can rehydrate.
+    free_tao REAL,
+    peak_value REAL,
+    hotkey_cooldowns_json TEXT,
+    last_cycle_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS paper_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    portfolio_id INTEGER NOT NULL,
+    netuid INTEGER NOT NULL,
+    entry_block INTEGER NOT NULL,
+    entry_time TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    alpha_amount REAL NOT NULL,
+    tao_invested REAL NOT NULL,
+    strategy TEXT NOT NULL,
+    hotkey_id INTEGER NOT NULL,
+    FOREIGN KEY (portfolio_id) REFERENCES paper_portfolios(id)
+);
+CREATE INDEX IF NOT EXISTS idx_paper_positions_portfolio
+    ON paper_positions(portfolio_id);
+
+CREATE TABLE IF NOT EXISTS paper_trades (
+    id TEXT PRIMARY KEY,                      -- UUID from Trade.id
+    portfolio_id INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    block INTEGER NOT NULL,
+    netuid INTEGER NOT NULL,
+    direction TEXT NOT NULL,                  -- 'buy' or 'sell'
+    strategy TEXT NOT NULL,
+    tao_amount REAL NOT NULL,
+    alpha_amount REAL NOT NULL,
+    spot_price REAL NOT NULL,
+    effective_price REAL NOT NULL,
+    slippage_pct REAL NOT NULL,
+    signal_strength REAL,
+    hotkey_id INTEGER,
+    entry_price REAL,
+    pnl_tao REAL,
+    pnl_pct REAL,
+    hold_duration_hours REAL,
+    entry_strategy TEXT,
+    FOREIGN KEY (portfolio_id) REFERENCES paper_portfolios(id)
+);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_portfolio_ts
+    ON paper_trades(portfolio_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS paper_value_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    portfolio_id INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    free_tao REAL NOT NULL,
+    total_value_tao REAL NOT NULL,
+    total_pnl_tao REAL NOT NULL,
+    drawdown_pct REAL NOT NULL,
+    num_open_positions INTEGER NOT NULL,
+    FOREIGN KEY (portfolio_id) REFERENCES paper_portfolios(id)
+);
+CREATE INDEX IF NOT EXISTS idx_paper_value_history_portfolio_ts
+    ON paper_value_history(portfolio_id, timestamp);
 """
 
 
@@ -538,6 +609,374 @@ class Database:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+    # --- Paper trading ---
+
+    async def create_paper_portfolio(
+        self,
+        name: str,
+        initial_capital_tao: float,
+        config_json: str,
+        created_at: str,
+    ) -> int:
+        async with self._write_lock:
+            cursor = await self._db.execute(
+                """INSERT INTO paper_portfolios
+                       (name, initial_capital_tao, config_json, created_at,
+                        active, free_tao, peak_value, hotkey_cooldowns_json,
+                        last_cycle_at)
+                   VALUES (?, ?, ?, ?, 1, ?, ?, NULL, NULL)""",
+                (name, initial_capital_tao, config_json, created_at,
+                 initial_capital_tao, initial_capital_tao),
+            )
+            await self._db.commit()
+            return cursor.lastrowid
+
+    async def list_paper_portfolios(self, active_only: bool = False) -> list[dict]:
+        sql = "SELECT * FROM paper_portfolios"
+        if active_only:
+            sql += " WHERE active = 1"
+        sql += " ORDER BY id ASC"
+        cursor = await self._db.execute(sql)
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_paper_portfolio(self, portfolio_id: int) -> dict | None:
+        cursor = await self._db.execute(
+            "SELECT * FROM paper_portfolios WHERE id = ?", (portfolio_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_paper_portfolio_runtime(self, portfolio_id: int) -> dict | None:
+        cursor = await self._db.execute(
+            """SELECT free_tao, peak_value, hotkey_cooldowns_json, last_cycle_at
+               FROM paper_portfolios WHERE id = ?""",
+            (portfolio_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def update_paper_portfolio_runtime(
+        self,
+        portfolio_id: int,
+        peak_value: float,
+        free_tao: float,
+        hotkey_cooldowns: dict,
+        last_cycle_at: str,
+    ) -> None:
+        cooldowns_json = json.dumps({str(k): int(v) for k, v in hotkey_cooldowns.items()})
+        async with self._write_lock:
+            await self._db.execute(
+                """UPDATE paper_portfolios
+                   SET free_tao = ?, peak_value = ?,
+                       hotkey_cooldowns_json = ?, last_cycle_at = ?
+                   WHERE id = ?""",
+                (free_tao, peak_value, cooldowns_json, last_cycle_at, portfolio_id),
+            )
+            await self._db.commit()
+
+    async def set_paper_portfolio_active(
+        self, portfolio_id: int, active: bool
+    ) -> bool:
+        async with self._write_lock:
+            cursor = await self._db.execute(
+                "UPDATE paper_portfolios SET active = ? WHERE id = ?",
+                (1 if active else 0, portfolio_id),
+            )
+            await self._db.commit()
+            return cursor.rowcount > 0
+
+    async def list_paper_positions(self, portfolio_id: int) -> list[dict]:
+        cursor = await self._db.execute(
+            """SELECT netuid, entry_block, entry_time, entry_price,
+                      alpha_amount, tao_invested, strategy, hotkey_id
+               FROM paper_positions WHERE portfolio_id = ?
+               ORDER BY netuid ASC""",
+            (portfolio_id,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def replace_paper_positions(
+        self, portfolio_id: int, positions: dict
+    ) -> None:
+        """Atomic replace: clear existing rows for this portfolio, then
+        insert one per current Position. The trader holds the source of
+        truth in memory; the table is just a crash-safe mirror."""
+        async with self._write_lock:
+            await self._db.execute(
+                "DELETE FROM paper_positions WHERE portfolio_id = ?",
+                (portfolio_id,),
+            )
+            for netuid, pos in positions.items():
+                entry_time = (
+                    pos.entry_time.isoformat()
+                    if hasattr(pos.entry_time, "isoformat")
+                    else str(pos.entry_time)
+                )
+                strategy = (
+                    pos.strategy.value
+                    if hasattr(pos.strategy, "value")
+                    else str(pos.strategy)
+                )
+                await self._db.execute(
+                    """INSERT INTO paper_positions
+                         (portfolio_id, netuid, entry_block, entry_time,
+                          entry_price, alpha_amount, tao_invested, strategy,
+                          hotkey_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        portfolio_id, int(netuid), int(pos.entry_block),
+                        entry_time, float(pos.entry_price),
+                        float(pos.alpha_amount), float(pos.tao_invested),
+                        strategy, int(pos.hotkey_id),
+                    ),
+                )
+            await self._db.commit()
+
+    async def insert_paper_trade(self, portfolio_id: int, trade) -> None:
+        """Append one trade row. ``trade`` is an ``api.trading.models.Trade``
+        but kept untyped here to avoid importing the trading package from
+        the database service."""
+        ts = (
+            trade.timestamp.isoformat()
+            if hasattr(trade.timestamp, "isoformat")
+            else str(trade.timestamp)
+        )
+        async with self._write_lock:
+            await self._db.execute(
+                """INSERT INTO paper_trades
+                     (id, portfolio_id, timestamp, block, netuid, direction,
+                      strategy, tao_amount, alpha_amount, spot_price,
+                      effective_price, slippage_pct, signal_strength,
+                      hotkey_id, entry_price, pnl_tao, pnl_pct,
+                      hold_duration_hours, entry_strategy)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    trade.id, portfolio_id, ts, int(trade.block),
+                    int(trade.netuid),
+                    trade.direction.value if hasattr(trade.direction, "value") else str(trade.direction),
+                    trade.strategy.value if hasattr(trade.strategy, "value") else str(trade.strategy),
+                    float(trade.tao_amount), float(trade.alpha_amount),
+                    float(trade.spot_price), float(trade.effective_price),
+                    float(trade.slippage_pct),
+                    float(trade.signal_strength) if trade.signal_strength is not None else None,
+                    int(trade.hotkey_id) if trade.hotkey_id is not None else None,
+                    float(trade.entry_price) if trade.entry_price is not None else None,
+                    float(trade.pnl_tao) if trade.pnl_tao is not None else None,
+                    float(trade.pnl_pct) if trade.pnl_pct is not None else None,
+                    float(trade.hold_duration_hours) if trade.hold_duration_hours is not None else None,
+                    trade.entry_strategy.value if (trade.entry_strategy and hasattr(trade.entry_strategy, "value")) else None,
+                ),
+            )
+            await self._db.commit()
+
+    async def list_paper_trades(
+        self, portfolio_id: int, limit: int = 200
+    ) -> list[dict]:
+        cursor = await self._db.execute(
+            """SELECT id, timestamp, block, netuid, direction, strategy,
+                      tao_amount, alpha_amount, spot_price, effective_price,
+                      slippage_pct, signal_strength, hotkey_id,
+                      entry_price, pnl_tao, pnl_pct, hold_duration_hours,
+                      entry_strategy
+               FROM paper_trades WHERE portfolio_id = ?
+               ORDER BY datetime(timestamp) DESC LIMIT ?""",
+            (portfolio_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def count_paper_trades(self, portfolio_id: int) -> int:
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM paper_trades WHERE portfolio_id = ?",
+            (portfolio_id,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    async def insert_paper_value_history(
+        self,
+        portfolio_id: int,
+        timestamp: str,
+        free_tao: float,
+        total_value_tao: float,
+        total_pnl_tao: float,
+        drawdown_pct: float,
+        num_open_positions: int,
+    ) -> None:
+        async with self._write_lock:
+            await self._db.execute(
+                """INSERT INTO paper_value_history
+                     (portfolio_id, timestamp, free_tao, total_value_tao,
+                      total_pnl_tao, drawdown_pct, num_open_positions)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (portfolio_id, timestamp, float(free_tao),
+                 float(total_value_tao), float(total_pnl_tao),
+                 float(drawdown_pct), int(num_open_positions)),
+            )
+            await self._db.commit()
+
+    async def get_paper_value_history(
+        self, portfolio_id: int, hours: int = 168, limit: int = 5000
+    ) -> list[dict]:
+        cursor = await self._db.execute(
+            """SELECT timestamp, free_tao, total_value_tao, total_pnl_tao,
+                      drawdown_pct, num_open_positions
+               FROM paper_value_history
+               WHERE portfolio_id = ?
+                 AND datetime(timestamp) >= datetime('now', ?)
+               ORDER BY datetime(timestamp) ASC
+               LIMIT ?""",
+            (portfolio_id, f"-{hours} hours", limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_paper_anchor_timestamp(self, portfolio_id: int) -> str | None:
+        """Earliest value_history timestamp, used as the buy-and-hold
+        anchor. Stable across window changes so the benchmark line
+        doesn't shift when the user toggles 24h vs 7d vs 30d."""
+        cursor = await self._db.execute(
+            """SELECT timestamp FROM paper_value_history
+               WHERE portfolio_id = ?
+               ORDER BY datetime(timestamp) ASC LIMIT 1""",
+            (portfolio_id,),
+        )
+        row = await cursor.fetchone()
+        return row["timestamp"] if row else None
+
+    async def compute_paper_benchmark_series(
+        self,
+        portfolio_id: int,
+        timestamps: list[str],
+        initial_capital_tao: float,
+        exclude_netuids: list[int] | None = None,
+        min_pool_depth_tao: float = 50.0,
+    ) -> tuple[list[float], list[int]]:
+        """Pool-weighted buy-and-hold benchmark series.
+
+        The anchor is the portfolio's earliest value_history row. At the
+        anchor we build a basket whose weight[n] = tao_in[n] / total, then
+        convert to alpha holdings. At each requested timestamp we sum
+        ``holdings[n] * alpha_price[n]_t`` using the latest subnet snapshot
+        at or before that timestamp.
+
+        Returns ``(values, universe_netuids)``. ``values`` aligns 1:1 with
+        ``timestamps``; ``universe_netuids`` lists the netuids in the
+        basket so the UI can label what's being benchmarked against.
+        """
+        if not timestamps:
+            return [], []
+
+        anchor_ts = await self.get_paper_anchor_timestamp(portfolio_id)
+        if not anchor_ts:
+            return [initial_capital_tao for _ in timestamps], []
+
+        exclude = set(exclude_netuids or [])
+
+        # Anchor universe: latest snapshot per netuid at-or-before the anchor.
+        cursor = await self._db.execute(
+            """SELECT s.netuid, s.alpha_price_tao, s.tao_in
+               FROM subnet_snapshots s
+               INNER JOIN (
+                 SELECT netuid, MAX(block) AS max_block
+                 FROM subnet_snapshots
+                 WHERE datetime(timestamp) <= datetime(?)
+                 GROUP BY netuid
+               ) latest ON s.netuid = latest.netuid AND s.block = latest.max_block""",
+            (anchor_ts,),
+        )
+        anchor_rows = await cursor.fetchall()
+
+        holdings: dict[int, float] = {}
+        eligible: list[tuple[int, float, float]] = []
+        for r in anchor_rows:
+            n = int(r["netuid"])
+            if n in exclude:
+                continue
+            tao_in = float(r["tao_in"] or 0.0)
+            price = float(r["alpha_price_tao"] or 0.0)
+            if tao_in < min_pool_depth_tao or price <= 0:
+                continue
+            eligible.append((n, tao_in, price))
+
+        if not eligible:
+            return [initial_capital_tao for _ in timestamps], []
+
+        total_tao_in = sum(t for _, t, _ in eligible)
+        for n, t, p in eligible:
+            weight = t / total_tao_in
+            holdings[n] = (initial_capital_tao * weight) / p
+
+        netuids = list(holdings.keys())
+        placeholders = ",".join("?" * len(netuids))
+
+        # Pull all relevant subnet snapshots from anchor to now in one go.
+        cursor = await self._db.execute(
+            f"""SELECT netuid, timestamp, alpha_price_tao
+                FROM subnet_snapshots
+                WHERE netuid IN ({placeholders})
+                  AND datetime(timestamp) >= datetime(?)
+                ORDER BY netuid ASC, datetime(timestamp) ASC""",
+            (*netuids, anchor_ts),
+        )
+        rows = await cursor.fetchall()
+
+        by_netuid: dict[int, list[tuple[str, float]]] = {n: [] for n in netuids}
+        for r in rows:
+            n = int(r["netuid"])
+            if n in by_netuid:
+                by_netuid[n].append((r["timestamp"], float(r["alpha_price_tao"] or 0.0)))
+
+        values: list[float] = []
+        for ts in timestamps:
+            total = 0.0
+            for n, alpha_amt in holdings.items():
+                seq = by_netuid.get(n)
+                if not seq:
+                    continue
+                lo, hi = 0, len(seq)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if seq[mid][0] <= ts:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                idx = lo - 1
+                if idx < 0:
+                    price = seq[0][1]
+                else:
+                    price = seq[idx][1]
+                total += alpha_amt * price
+            values.append(total)
+        return values, netuids
+
+    async def load_recent_snapshots(
+        self, hours: int = 720, limit_per_netuid: int = 5000
+    ) -> dict[int, list[dict]]:
+        """Pull recent ``subnet_snapshots`` rows grouped by netuid. Used
+        by the paper trader to seed its feature buffer each cycle."""
+        cursor = await self._db.execute(
+            """SELECT netuid, block, timestamp, alpha_price_tao, tao_price_usd,
+                      tao_in, alpha_in, total_stake, emission_rate,
+                      validator_count, neuron_count
+               FROM subnet_snapshots
+               WHERE datetime(timestamp) >= datetime('now', ?)
+               ORDER BY netuid ASC, block ASC""",
+            (f"-{hours} hours",),
+        )
+        rows = await cursor.fetchall()
+        out: dict[int, list[dict]] = {}
+        for r in rows:
+            d = dict(r)
+            n = int(d["netuid"])
+            bucket = out.setdefault(n, [])
+            if len(bucket) >= limit_per_netuid:
+                continue
+            bucket.append(d)
+        return out
 
     async def update_tao_prices_hourly(self, prices_by_hour: dict[str, float]) -> int:
         """Fill ``tao_price_usd`` for rows whose timestamp falls in one of the

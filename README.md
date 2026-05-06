@@ -15,10 +15,12 @@ https://opentao.rpmsystems.io/
 - TaoStats-compatible `/miner/` endpoint for drop-in replacement
 - OHLC candles for every subnet (`5m`/`15m`/`1h`/`4h`/`1d`)
 - Wallet watchlist with portfolio value persisted over time, charted on the portfolio page
+- Paper trading runner with strategy plugin registry: built-in stake_velocity, mean_reversion, momentum, drain_exit; bring your own via `OPENTAO_EXTERNAL_STRATEGIES`
+- Backtester with constant-product AMM slippage, per-hotkey rate limits, and zero lookahead bias
 - Webhook subscriptions for threshold crossings
 - Server-Sent Events stream of live snapshot inserts
 - Embeddable SVG sparkline widgets (no auth required)
-- Web dashboard: portfolio viewer with history chart, wallet watchlist, subnets overview, miners/validators tables
+- Web dashboard: portfolio viewer with history chart, wallet watchlist, paper-trading equity curve, subnets overview, miners/validators tables
 - Direct chain queries via Bittensor SDK (no third-party APIs except MEXC for price)
 - Historical data: SQLite storage with epoch-resolution snapshots via public archive node, live polling
 - Backfill scripts pull directly from chain and MEXC, no third-party API keys needed
@@ -56,6 +58,7 @@ docker-compose up -d
 | Subnets dashboard | `/` | All subnets ranked by market cap with sparklines, live SSE-ticking prices |
 | Subnet detail | `/subnet/{netuid}` | Interactive candlestick chart, miners/validators tabs, embed snippet, alert subscribe |
 | Wallets | `/wallets` | Watchlist of tracked coldkeys with sparklines and last-poll age. Add and remove inline. |
+| Paper trading | `/paper` | Create paper portfolios, pick strategies, watch equity curve and trade markers live |
 | Webhooks | `/webhooks` | Create, list, and delete webhook subscriptions |
 | Portfolio | `/portfolio/{coldkey}` | Coldkey balance across all subnets, with portfolio value over time chart for tracked wallets |
 
@@ -88,6 +91,84 @@ GET /api/v1/portfolio/{coldkey}/history?hours=168
 `/portfolio/{coldkey}` is the live cross-subnet portfolio: total balance (TAO + USD), free balance, staked balance, and per-subnet breakdown with alpha balance, TAO equivalent, price, daily yield.
 
 `/portfolio/{coldkey}/history` returns a time series of total portfolio value for any coldkey on the watchlist (see Wallets below). Empty array if the coldkey isn't tracked yet. Drop into a charting library or query straight from a notebook.
+
+### Paper trading
+
+```
+POST   /api/v1/paper/portfolios
+GET    /api/v1/paper/portfolios
+GET    /api/v1/paper/portfolios/{id}
+GET    /api/v1/paper/portfolios/{id}/positions
+GET    /api/v1/paper/portfolios/{id}/trades
+GET    /api/v1/paper/portfolios/{id}/history
+POST   /api/v1/paper/portfolios/{id}/pause
+POST   /api/v1/paper/portfolios/{id}/resume
+GET    /api/v1/trading/strategies
+```
+
+Create a paper portfolio, pick which registered strategies it should run, and the background runner advances it on the configured cadence using the same in-process chain client and snapshot poller. State persists to `paper_portfolios` / `paper_positions` / `paper_trades` / `paper_value_history` so a restart picks up where the previous process stopped.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/paper/portfolios \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "demo",
+    "initial_capital_tao": 100,
+    "strategies": ["mean_reversion", "momentum"],
+    "poll_interval_seconds": 1800
+  }'
+```
+
+The runner is gated by `PAPER_TRADING_ENABLED=true`; reads work either way so you can browse the dashboard on a public instance without running anyone's bot. `drain_exit` is always added as a safety net regardless of which entry strategies you pick.
+
+#### Plugin strategies
+
+The strategy registry lives at `api/trading/strategies/`. Built-ins are:
+
+- `stake_velocity`, `mean_reversion`, `momentum`: entry strategies with different signal sources
+- `drain_exit`: exit-only safety net, always active
+
+To add your own, drop a file like this anywhere on disk and point `OPENTAO_EXTERNAL_STRATEGIES` at the directory (or single file):
+
+```python
+# /opt/my_strategies/buy_dips.py
+from api.trading.models import Direction, Signal, StrategyName
+from api.trading.strategies import register_strategy
+from api.trading.strategies.base import Strategy
+
+@register_strategy("buy_dips")
+class BuyDipsStrategy(Strategy):
+    """Buy on strong negative price momentum, hold 24h."""
+
+    def name(self): return StrategyName.EXTERNAL
+
+    def generate_entry_signal(self, netuid, features, snapshot):
+        pm = features.price_momentum_24h
+        if pm is None or pm > -0.05:
+            return None
+        return Signal(
+            timestamp=snapshot.timestamp, netuid=netuid,
+            direction=Direction.BUY, strategy=self.name(),
+            strength=min(abs(pm) / 0.10, 1.0),
+            reason=f"24h dip {pm*100:.1f}% on SN{netuid}",
+            features=features.to_dict(),
+        )
+
+    def generate_exit_signal(self, netuid, features, snapshot, position):
+        if position.hold_duration_hours(snapshot.timestamp) >= 24:
+            return Signal(
+                timestamp=snapshot.timestamp, netuid=netuid,
+                direction=Direction.SELL, strategy=StrategyName.HOLD_TIMEOUT,
+                strength=1.0, reason="24h hold", features=features.to_dict(),
+            )
+        return None
+```
+
+```bash
+OPENTAO_EXTERNAL_STRATEGIES=/opt/my_strategies uvicorn api.main:app
+```
+
+`GET /api/v1/trading/strategies` then lists `buy_dips` alongside the built-ins with `source: external:/opt/my_strategies/buy_dips.py`. The web "Create paper portfolio" form picks it up automatically.
 
 ### Wallets (watchlist)
 
@@ -348,6 +429,8 @@ All settings via environment variables (or `.env` file):
 | `HISTORY_POLL_NETUIDS` | _(empty)_ | Comma-separated netuids to poll (empty = all active) |
 | `API_HOST` | `0.0.0.0` | Bind address |
 | `API_PORT` | `8000` | Port |
+| `PAPER_TRADING_ENABLED` | `false` | Run paper-trading cycles for active portfolios. Read-only API works regardless. |
+| `OPENTAO_EXTERNAL_STRATEGIES` | _(empty)_ | Colon-separated paths to user strategy files/directories. Loaded into the registry on startup. |
 
 ## Project Structure
 
@@ -364,6 +447,7 @@ OpenTaoAPI/
 │   │   ├── emissions.py        # Emission breakdown
 │   │   ├── portfolio.py        # Cross-subnet portfolio + history endpoint
 │   │   ├── wallets.py          # Watchlist CRUD (add/list/remove tracked coldkeys)
+│   │   ├── paper.py            # Paper portfolio CRUD, positions, trades, history, strategy registry
 │   │   ├── history.py          # Historical snapshots + OHLC candles
 │   │   ├── stream.py           # Server-Sent Events live feed
 │   │   ├── webhooks.py         # Threshold-crossing webhook subscriptions
@@ -372,11 +456,26 @@ OpenTaoAPI/
 │   │   ├── chain_client.py     # Bittensor SDK wrapper with per-RPC timeouts
 │   │   ├── price_client.py     # MEXC live price + historical klines
 │   │   ├── cache.py            # In-memory TTL cache
-│   │   ├── database.py         # SQLite storage (snapshots, webhooks, wallet watchlist)
+│   │   ├── database.py         # SQLite storage (snapshots, webhooks, watchlist, paper trading)
 │   │   ├── broker.py           # Fan-out broker for live snapshot events
 │   │   ├── portfolio_service.py # Shared portfolio compute (route + wallet poller)
 │   │   ├── metagraph_compat.py # SDK version compatibility layer
 │   │   └── calculations.py     # Emission math
+│   ├── trading/                # Paper trading + backtester package
+│   │   ├── config.py           # TradingConfig dataclass
+│   │   ├── models.py           # Snapshot, Features, Signal, Trade, Position, PortfolioState
+│   │   ├── amm.py              # Constant-product AMM math, slippage, position sizing
+│   │   ├── features.py         # Causal feature engine (z-score, momentum, velocity)
+│   │   ├── risk.py             # Position-sizing risk manager
+│   │   ├── portfolio.py        # PortfolioTracker (in-memory, SQLite-backed)
+│   │   ├── paper_trader.py     # In-process paper trading runner
+│   │   ├── backtester.py       # Historical replay with rate limits and slippage
+│   │   ├── data.py             # Read-only DataLoader over subnet_snapshots
+│   │   ├── cli.py              # python -m api.trading.cli ...
+│   │   └── strategies/         # Strategy plugin package
+│   │       ├── base.py         # Strategy ABC
+│   │       ├── stake_velocity.py, mean_reversion.py, momentum.py, drain_detector.py
+│   │       └── __init__.py     # Registry, decorator, external loader
 │   └── models/
 │       └── schemas.py          # Pydantic response models
 ├── scripts/
@@ -435,6 +534,8 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 | Miner and validator tables | ✅ | ✅ | ✅ | ✅ |
 | Coldkey portfolio view | ✅ | ✅ | ✅ | ✅ |
 | Persistent portfolio value over time (per-wallet history) | ✅ | partial | partial | partial |
+| Paper trading runner with plugin strategies | ✅ | ❌ | ❌ | ❌ |
+| Backtester with AMM slippage + rate limits | ✅ | ❌ | ❌ | ❌ |
 | Full metagraph export | ✅ | limited | ❌ | limited |
 | Stake transfer tracking | ❌ | ✅ | ❌ | ✅ |
 | Holder breakdowns | ❌ | ✅ | ✅ | ✅ |
