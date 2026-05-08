@@ -600,9 +600,9 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 
 **Caching:** metagraph syncs are expensive (~10-20s cold). All queries are cached in-memory with configurable TTLs. Use `?refresh=true` on metagraph endpoints to force a fresh sync.
 
-## Hosted demo
+## Deployment
 
-A public demo runs at [opentao.rpmsystems.io](https://opentao.rpmsystems.io). The demo is read-only and exists to evaluate the API shape quickly; for anything beyond light testing please self-host. See `docs/deploy-fly.md` for the one-command Fly deployment, or `docker compose up -d` / the conda path in [Quick Start](#quick-start) for a local instance in under a minute.
+`docker compose up -d` or the conda path in [Quick Start](#quick-start) gets you a local instance in under a minute. For Fly.io specifically, see [docs/deploy-fly.md](docs/deploy-fly.md).
 
 ## Contact
 
