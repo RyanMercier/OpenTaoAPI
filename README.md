@@ -1,38 +1,62 @@
 # OpenTaoAPI
 
+A production-grade Bittensor analytics platform: REST + Server-Sent Events stream + webhooks + paper-and-live trading + AMM-aware backtester, all running off direct chain queries. Drop-in replacement for the closed-source incumbents.
+
 **Self-hosted open-source alternative to TaoStats, TaoMarketCap, and tao.app.** Run it on your own box, own your data, pay nothing.
 
-The project gives you everything a hosted Bittensor analytics provider does (subnet prices, OHLC candles, portfolio tracking, miner and validator tables, historical snapshots), plus the three things closed-source products structurally can't: webhooks, a live event stream, and embeddable widgets with no API key.
+> Built solo by Ryan Mercier. Open to roles in Bittensor infra, crypto analytics, or trading systems. [Contact](#contact).
 
-**Web UI** at `http://localhost:8000` · **Swagger docs** at `http://localhost:8000/docs`
+**Web UI** at `http://localhost:8000` &middot; **Swagger docs** at `http://localhost:8000/docs`
 
 ## Live Demo
-https://opentao.rpmsystems.io/
 
-## Features
+[opentao.rpmsystems.io](https://opentao.rpmsystems.io/) &middot; running 24/7, polling chain on a 30-min cadence, no API key required.
 
-- REST API with full subnet, neuron, emission, and portfolio data
-- TaoStats-compatible `/miner/` endpoint for drop-in replacement
-- OHLC candles for every subnet (`5m`/`15m`/`1h`/`4h`/`1d`)
-- Wallet watchlist with portfolio value persisted over time, charted on the portfolio page
-- Paper trading runner with strategy plugin registry: built-in stake_velocity, mean_reversion, momentum, drain_exit; bring your own via `OPENTAO_EXTERNAL_STRATEGIES`
-- Live on-chain execution: same signal pipeline, real `add_stake` / `unstake` extrinsics, CLI-only with the wallet decrypted in your terminal (keys never reach the FastAPI process)
-- Per-portfolio metrics: total return, vs pool-weighted buy-and-hold, alpha, Sharpe, Sortino, win rate, max drawdown, profit factor
-- Backtester with constant-product AMM slippage, per-hotkey rate limits, and zero lookahead bias
-- Webhook subscriptions for threshold crossings
-- Server-Sent Events stream of live snapshot inserts
-- Embeddable SVG sparkline widgets (no auth required)
-- Web dashboard: portfolio viewer with history chart, wallet watchlist, paper-trading equity curve, subnets overview, miners/validators tables
-- Direct chain queries via Bittensor SDK (no third-party APIs except MEXC for price)
-- Historical data: SQLite storage with epoch-resolution snapshots via public archive node, live polling
-- Backfill scripts pull directly from chain and MEXC, no third-party API keys needed
-- In-memory caching with configurable TTLs, per-RPC timeouts, supervised background workers
-- `/health` returns HTTP 503 when the poller is stale. Wire it directly to `docker healthcheck`, Fly, Kubernetes, etc.
-- Self-hostable with Docker or conda
+![Paper trading dashboard with equity curve, drawdown, headline stats and trade markers](docs/images/paper-dashboard.png)
 
-### Why self-host?
+![Portfolio page with value-over-time chart and per-subnet token breakdown](docs/images/portfolio.png)
 
-Hosted providers (TaoStats, TaoMarketCap, tao.app) have rate limits, require API keys for anything beyond casual browsing, and can change pricing or shut down features without notice. OpenTaoAPI gives you the same data directly from chain, plus integration primitives (webhooks, SSE, embeds) the hosted services don't offer. Point it at the public archive node or your own validator's node.
+![Subnets dashboard ranked by market cap with live sparklines](docs/images/subnets.png)
+
+## What's actually here
+
+Three things that the hosted alternatives structurally cannot ship:
+
+- **Live on-chain trading from your own keys.** A CLI runner unlocks the wallet locally, signs `add_stake` / `unstake` extrinsics, and writes trades to the same SQLite the dashboard reads. Keys never enter the FastAPI process. Same equity curve, drawdown, win rate, Sharpe whether you're paper or live.
+- **Plugin strategy registry.** Drop a Python file at any path, decorate the class with `@register_strategy("name")`, point `OPENTAO_EXTERNAL_STRATEGIES` at it, and the runner picks it up alongside the four built-ins. The web "create portfolio" form lists every registered strategy automatically.
+- **AMM-aware backtester.** Constant-product slippage on every trade, per-hotkey rate-limit enforcement (1 stake per 360 blocks), and zero-lookahead causal feature computation. The same engine drives paper trading; the same dashboard displays both.
+
+## How it stacks up
+
+| Feature | OpenTaoAPI | TaoStats | TaoMarketCap | tao.app |
+|---|---|---|---|---|
+| Open source | MIT | no | no | no |
+| Self-hostable | yes | no | no | no |
+| API key required | no | yes | yes | yes |
+| Rate-limited (free tier) | none on self-host | 5 req/min | yes | yes |
+| Subnet prices and market caps | yes | yes | yes | yes |
+| OHLC candles | yes | no | yes | yes |
+| Miner and validator tables | yes | yes | yes | yes |
+| Coldkey portfolio view | yes | yes | yes | yes |
+| Persistent portfolio value over time (per-wallet history) | yes | partial | partial | partial |
+| Paper trading runner with plugin strategies | yes | no | no | no |
+| Live on-chain execution from your own keys (CLI signs locally) | yes | no | no | no |
+| Headline metrics endpoint (Sharpe, win rate, drawdown, alpha vs benchmark) | yes | partial | partial | partial |
+| Backtester with AMM slippage + rate limits | yes | no | no | no |
+| Full metagraph export | yes | limited | no | limited |
+| Stake transfer tracking | no | yes | no | yes |
+| Holder breakdowns | no | yes | yes | yes |
+| Block and extrinsic data | no | yes | no | yes |
+| TaoStats-compatible `/miner/` endpoint | yes | n/a | no | no |
+| Webhook alerts | yes | no | no | no |
+| Live event stream (SSE) | yes | no | no | no |
+| Embeddable no-auth widgets | yes | no | no | no |
+
+TaoMarketCap and tao.app are further along on breadth (stake transfers, holder analytics, block-level data). The point of OpenTaoAPI isn't to win that race; it's to be the only option you can run on your own box with webhooks, SSE, and a trading runner baked in.
+
+## Why I built this
+
+TaoStats and TaoMarketCap both rate-limit and require API keys. I needed reliable subnet data for a mining dashboard and trading experiments, and the hosted services either weren't fast enough on the data I cared about or charged for tier features I didn't need. The webhook, SSE, and embed primitives don't exist on the hosted side at all, so even if I paid I couldn't get them. So I built it. The trading layer came later, once I had the snapshot infrastructure stable enough to backtest against.
 
 ## Quick Start
 
@@ -53,18 +77,20 @@ First startup takes ~15-20s for the initial metagraph sync. Subsequent requests 
 docker-compose up -d
 ```
 
+## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the design decisions behind the supervisor + per-RPC timeout pattern, the snapshot broker fan-out, and on-demand backfill coalescing.
+
 ## Web UI
 
 | Page | URL | Description |
 |------|-----|-------------|
 | Subnets dashboard | `/` | All subnets ranked by market cap with sparklines, live SSE-ticking prices |
 | Subnet detail | `/subnet/{netuid}` | Interactive candlestick chart, miners/validators tabs, embed snippet, alert subscribe |
-| Wallets | `/wallets` | Watchlist of tracked coldkeys with sparklines and last-poll age. Add and remove inline. |
+| Wallets | `/wallets` | Watchlist of tracked coldkeys with sparklines and last-poll age |
 | Paper trading | `/paper` | Create paper portfolios, pick strategies, watch equity curve and trade markers live |
 | Webhooks | `/webhooks` | Create, list, and delete webhook subscriptions |
 | Portfolio | `/portfolio/{coldkey}` | Coldkey balance across all subnets, with portfolio value over time chart for tracked wallets |
-
-Old URL `/subnet/{netuid}/miners` redirects to `/subnet/{netuid}?tab=miners`.
 
 The subnet detail page uses [lightweight-charts](https://github.com/tradingview/lightweight-charts) (Apache-2.0), vendored locally at `frontend/vendor/` so self-hosted installs work offline. Refresh the vendored copy with:
 
@@ -72,6 +98,32 @@ The subnet detail page uses [lightweight-charts](https://github.com/tradingview/
 curl -L -o frontend/vendor/lightweight-charts.standalone.production.js \
   https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js
 ```
+
+## Features
+
+<details>
+<summary>Full feature list (click to expand)</summary>
+
+- REST API with full subnet, neuron, emission, and portfolio data
+- TaoStats-compatible `/miner/` endpoint for drop-in replacement
+- OHLC candles for every subnet (`5m`/`15m`/`1h`/`4h`/`1d`)
+- Wallet watchlist with portfolio value persisted over time
+- Paper trading runner with strategy plugin registry (built-in: stake_velocity, mean_reversion, momentum, drain_exit; external via `OPENTAO_EXTERNAL_STRATEGIES`)
+- Live on-chain execution: same signal pipeline, real `add_stake` / `unstake` extrinsics, CLI-only with the wallet decrypted in your terminal (keys never reach the FastAPI process)
+- Per-portfolio metrics: total return, vs pool-weighted buy-and-hold, alpha, Sharpe, Sortino, win rate, max drawdown, profit factor
+- Backtester with constant-product AMM slippage, per-hotkey rate limits, and zero lookahead bias
+- Webhook subscriptions for threshold crossings
+- Server-Sent Events stream of live snapshot inserts
+- Embeddable SVG sparkline widgets (no auth required)
+- Web dashboard: portfolio viewer with history chart, wallet watchlist, paper-trading equity curve, subnets overview, miners/validators tables
+- Direct chain queries via Bittensor SDK (no third-party APIs except MEXC for price)
+- Historical data: SQLite storage with epoch-resolution snapshots via public archive node, live polling
+- Backfill scripts pull directly from chain and MEXC, no third-party API keys needed
+- In-memory caching with configurable TTLs, per-RPC timeouts, supervised background workers
+- `/health` returns HTTP 503 when the poller is stale. Wire it directly to `docker healthcheck`, Fly, Kubernetes, etc.
+- Self-hostable with Docker or conda
+
+</details>
 
 ## API Endpoints
 
@@ -237,15 +289,6 @@ GET /api/v1/miner/{coldkey}/{netuid}
 ```
 
 Response format matches the TaoStats `/api/miner/` endpoint. Includes coldkey balance, alpha balances across all subnets, hotkey details with emission data, and mining rank.
-
-> **Note on zeroed fields.** For drop-in compatibility the response includes
-> `immune`, `in_danger`, `deregistered`, `registration_block`,
-> `total_immune_hotkeys`, `total_hotkeys_in_danger`,
-> `total_deregistered_hotkeys`, and related counters, but OpenTaoAPI returns
-> them as zero/false. They'd require scanning every historical block for a
-> hotkey and weren't needed by the projects that drove the initial build. If
-> you need real values, they're straightforward to compute from the
-> metagraph's `registration_block` vector plus `ImmunityPeriod`. PRs welcome.
 
 ### Subnets
 
@@ -526,7 +569,10 @@ OpenTaoAPI/
 │   └── vendor/
 │       └── lightweight-charts.standalone.production.js  # TradingView charts, Apache-2.0
 ├── docs/
-│   └── deploy-fly.md           # Fly.io deployment guide
+│   ├── deploy-fly.md           # Fly.io deployment guide
+│   └── images/                 # README screenshots
+├── ARCHITECTURE.md
+├── SUPPORT.md
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
@@ -554,45 +600,15 @@ Where `meta.E[uid]` is alpha per epoch, `tempo` is blocks per epoch (usually 360
 
 **Caching:** metagraph syncs are expensive (~10-20s cold). All queries are cached in-memory with configurable TTLs. Use `?refresh=true` on metagraph endpoints to force a fresh sync.
 
-## Comparison
+## Hosted demo
 
-| Feature | OpenTaoAPI | TaoStats | TaoMarketCap | tao.app |
-|---|---|---|---|---|
-| Open source | ✅ MIT | ❌ | ❌ | ❌ |
-| Self-hostable | ✅ | ❌ | ❌ | ❌ |
-| API key required | ❌ | ✅ | ✅ | ✅ |
-| Rate-limited (free tier) | none on self-host | 5 req/min | yes | yes |
-| Subnet prices and market caps | ✅ | ✅ | ✅ | ✅ |
-| OHLC candles | ✅ | ❌ | ✅ | ✅ |
-| Miner and validator tables | ✅ | ✅ | ✅ | ✅ |
-| Coldkey portfolio view | ✅ | ✅ | ✅ | ✅ |
-| Persistent portfolio value over time (per-wallet history) | ✅ | partial | partial | partial |
-| Paper trading runner with plugin strategies | ✅ | ❌ | ❌ | ❌ |
-| Live on-chain execution from your own keys (CLI signs locally) | ✅ | ❌ | ❌ | ❌ |
-| Headline metrics endpoint (Sharpe, win rate, drawdown, alpha vs benchmark) | ✅ | partial | partial | partial |
-| Backtester with AMM slippage + rate limits | ✅ | ❌ | ❌ | ❌ |
-| Full metagraph export | ✅ | limited | ❌ | limited |
-| Stake transfer tracking | ❌ | ✅ | ❌ | ✅ |
-| Holder breakdowns | ❌ | ✅ | ✅ | ✅ |
-| Block and extrinsic data | ❌ | ✅ | ❌ | ✅ |
-| TaoStats-compatible `/miner/` endpoint | ✅ | n/a | ❌ | ❌ |
-| Webhook alerts | ✅ | ❌ | ❌ | ❌ |
-| Live event stream (SSE) | ✅ | ❌ | ❌ | ❌ |
-| Embeddable no-auth widgets | ✅ | ❌ | ❌ | ❌ |
-
-TaoMarketCap and tao.app are further along on breadth (stake transfers, holder analytics, block-level data). The point of OpenTaoAPI isn't to win that race; it's to be the **only** option you can run on your own box with webhooks and SSE baked in. If you need deep historical flow analysis right now, use tao.app. If you need a reliable, self-hosted, integration-friendly API that will never lock you out or change terms, self-host this.
-
-## Support
-
-If this project is useful to you, consider supporting development:
-
-```
-TAO: 5EhrSbeGeiLgsXcJTXXaBCcqrrMubvWcykSwk4Ho6KUd5sQG
-```
+A public demo runs at [opentao.rpmsystems.io](https://opentao.rpmsystems.io). The demo is read-only and exists to evaluate the API shape quickly; for anything beyond light testing please self-host. See `docs/deploy-fly.md` for the one-command Fly deployment, or `docker compose up -d` / the conda path in [Quick Start](#quick-start) for a local instance in under a minute.
 
 ## Contact
 
-Built by Ryan Mercier ([github.com/ryanmercier](https://github.com/ryanmercier)). Open to roles in Bittensor infrastructure, analytics, or trading tooling. Issues and PRs welcome, or reach out directly.
+Built by Ryan Mercier ([github.com/ryanmercier](https://github.com/ryanmercier)). Open to roles in Bittensor infrastructure, analytics, or trading systems. Issues and PRs welcome, or reach out directly.
+
+Donations: see [SUPPORT.md](SUPPORT.md).
 
 ## License
 
