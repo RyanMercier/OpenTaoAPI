@@ -1,8 +1,8 @@
 # OpenTaoAPI
 
-A production-grade Bittensor analytics platform: REST + Server-Sent Events stream + webhooks + paper-and-live trading + AMM-aware backtester, all running off direct chain queries. Drop-in replacement for the closed-source incumbents.
+Self-hosted Bittensor analytics: REST API, live SSE stream, webhooks, paper and live trading, and an AMM-aware backtester. Everything reads direct from chain. No API key, no rate limit, no vendor lock-in.
 
-**Self-hosted open-source alternative to TaoStats, TaoMarketCap, and tao.app.** Run it on your own box, own your data, pay nothing.
+**A self-hosted alternative to TaoStats, TaoMarketCap, and tao.app.** Run it on your own box, own your data, pay nothing.
 
 > Built solo by Ryan Mercier. Open to roles in Bittensor infra, crypto analytics, or trading systems. [Contact](#contact).
 
@@ -20,11 +20,11 @@ A production-grade Bittensor analytics platform: REST + Server-Sent Events strea
 
 ## What's actually here
 
-Three things that the hosted alternatives structurally cannot ship:
+Three things hosted alternatives can't do:
 
-- **Live on-chain trading from your own keys.** A CLI runner unlocks the wallet locally, signs `add_stake` / `unstake` extrinsics, and writes trades to the same SQLite the dashboard reads. Keys never enter the FastAPI process. Same equity curve, drawdown, win rate, Sharpe whether you're paper or live.
-- **Plugin strategy registry.** Drop a Python file at any path, decorate the class with `@register_strategy("name")`, point `OPENTAO_EXTERNAL_STRATEGIES` at it, and the runner picks it up alongside the four built-ins. The web "create portfolio" form lists every registered strategy automatically.
-- **AMM-aware backtester.** Constant-product slippage on every trade, per-hotkey rate-limit enforcement (1 stake per 360 blocks), and zero-lookahead causal feature computation. The same engine drives paper trading; the same dashboard displays both.
+- **Live on-chain trading from your own keys.** A CLI runner unlocks the wallet locally, signs `add_stake` / `unstake` extrinsics, and writes trades to the same SQLite the dashboard reads. Keys never enter the FastAPI process. The equity curve, drawdown, win rate, and Sharpe are the same dashboard whether you're paper or live.
+- **Plugin strategy registry.** Drop a Python file anywhere on disk, decorate the class with `@register_strategy("name")`, point `OPENTAO_EXTERNAL_STRATEGIES` at it, and the runner picks it up alongside the four built-ins. The "create portfolio" form lists every registered strategy automatically.
+- **AMM-aware backtester.** Constant-product slippage on every trade, per-hotkey rate limit enforcement (1 stake per 360 blocks), and causal feature computation with no lookahead. The same engine drives paper trading and the same dashboard displays both.
 
 ## How it stacks up
 
@@ -56,7 +56,7 @@ TaoMarketCap and tao.app are further along on breadth (stake transfers, holder a
 
 ## Why I built this
 
-TaoStats and TaoMarketCap both rate-limit and require API keys. I needed reliable subnet data for a mining dashboard and trading experiments, and the hosted services either weren't fast enough on the data I cared about or charged for tier features I didn't need. The webhook, SSE, and embed primitives don't exist on the hosted side at all, so even if I paid I couldn't get them. So I built it. The trading layer came later, once I had the snapshot infrastructure stable enough to backtest against.
+TaoStats and TaoMarketCap both rate-limit and require API keys. I needed reliable subnet data for a mining dashboard and trading experiments, and the hosted services were either too slow on what I needed or paywalled it. The webhook, SSE, and embed primitives don't exist on the hosted side at all, so even paying wouldn't fix it. So I built it. The trading layer came later, once the snapshot pipeline was stable enough to backtest against.
 
 ## Quick Start
 
