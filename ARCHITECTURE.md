@@ -1,35 +1,37 @@
 # Architecture
 
-One FastAPI process, three long-lived background tasks (subnet snapshot
-poller, wallet poller, paper-trading runner), one SQLite file. Reads
-come from cached chain queries or the local DB. Three things worth
-calling out:
+One FastAPI process, two long-lived background tasks (subnet snapshot
+poller and wallet poller), one SQLite file. Reads come from cached
+chain queries or the local DB. Three things worth calling out:
 
 ```
-                +-----------------+
-                | Bittensor chain |
-                | (AsyncSubtensor)|
-                +--------+--------+
-                         |
-                         v
-        +----------------+----------------+
-        |          ChainClient            |
-        |  (per-RPC timeout, TTL cache)   |
-        +-+-------+-------+----------+----+
-          |       |       |          |
-          v       v       v          v
-    +-----+--+ +--+--+ +--+----+ +---+----+
-    | _live  | |wallet| |paper | |  REST  |
-    | poller | |poller| |runner| |+ SSE   |
-    +---+----+ +--+---+ +--+---+ +---+----+
-        |         |        |         |
-        v         v        v         v
-    +---+---------+--------+--+   +--+--+
-    |     SQLite (aiosqlite)  |   |Brkr |
-    |  + asyncio.Lock writes  |   |fan- |
-    +-------------------------+   |out  |
-                                  +-----+
+              +-----------------+
+              | Bittensor chain |
+              | (AsyncSubtensor)|
+              +--------+--------+
+                       |
+                       v
+        +--------------+--------------+
+        |          ChainClient        |
+        |  (per-RPC timeout, TTL cache) |
+        +-+-------+----------+--------+
+          |       |          |
+          v       v          v
+    +-----+--+ +--+---+ +----+----+
+    | _live  | |wallet| |  REST   |
+    | poller | |poller| |+ SSE    |
+    +---+----+ +--+---+ +----+----+
+        |         |          |
+        v         v          v
+    +---+---------+----------+--+   +---+----+
+    |     SQLite (aiosqlite)    |   | Broker |
+    |  + asyncio.Lock writes    |   | fan-out|
+    +---------------------------+   +--------+
 ```
+
+Trading (paper + live) is a separate service in
+[OpenTaoTrader](https://github.com/ryanmercier/OpenTaoTrader). It reads
+this API's snapshot data over HTTP/SSE.
 
 ## Supervisor + per-RPC timeout
 
@@ -98,13 +100,3 @@ If you're running a validator node, point at that. The RPC timeout
 pattern means a flaky public node degrades to "no new snapshots for a
 few minutes" rather than a hung process.
 
-## Trading runner separation
-
-The paper-trading runner (`_paper_trader_runner`) runs in-process with
-the API. The live-trading runner does not; it's CLI-launched in its
-own process. That's the security boundary. The FastAPI process never
-sees a coldkey. The CLI loads the wallet locally, decrypts the key on
-stdin, and writes trades to the same SQLite file the API reads from.
-Concurrent SQLite access is safe because aiosqlite serializes writes
-through one `asyncio.Lock`, and the kernel's file lock handles the rare
-cross-process write overlaps.
